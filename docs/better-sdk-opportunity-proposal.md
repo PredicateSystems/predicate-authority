@@ -15,6 +15,18 @@ This proposal answers the "Better SDK Opportunity" in `northstar.md` by combinin
 - Caracal's strongest ideas (short-lived mandates, scope checks, fail-closed gateway-style enforcement, immutable authority ledger),
 - A bridge-first strategy (works with Azure AD/Okta/Auth0 and existing agent stacks).
 
+## Progress Dashboard
+
+Status snapshot date: 2026-02-16
+
+| Phase | Status | ETA | Owner |
+| --- | --- | --- | --- |
+| Phase 0: Architecture and Spec Lock | Partially complete | 1-2 weeks total (remaining: sign-off + schema/process formalization) | SDK + Platform + Security |
+| Phase 1: Local SDK Guard (MVP) | In progress | 3-5 weeks total (remaining: `sdk-python` hooks + OTel export + examples + CI publish flow) | SDK |
+| Phase 2: Sidecar + Identity Bridge | Not started (design only) | 4-6 weeks | Platform + Identity |
+| Phase 3: Hosted Governance Control Plane | Not started (design only) | 6-8 weeks | Platform + Product |
+| Phase 4: Enterprise Hardening and Scale | Not started (design only) | Ongoing (first 4-6 weeks) | Platform + Security + GTM |
+
 
 ## TL;DR Design
 
@@ -511,6 +523,19 @@ async def web_search_tool(query: str):
 - Basic policy DSL.
 - Trace/proof event emission to existing tracer.
 
+Status (as of 2026-02-16): **in progress (MVP scaffold implemented in this `predicate-authority` repository)**
+
+- Completed in repo:
+  - `predicate-contracts` package scaffold with typed contracts and protocols.
+  - `predicate-authority` local `ActionGuard.authorize(...)` + `enforce(...)`.
+  - Signed local mandates with TTL + verification.
+  - Local policy evaluation and normalized deny reasons.
+  - In-memory proof ledger with optional trace emitter interface.
+  - pytest coverage for policy, mandate signing, and proof emission paths.
+- Remaining to close full Phase 1 exit:
+  - connect CI publish jobs to real package build/publish steps and credentials,
+  - publish first `predicate-contracts` and `predicate-authority` versions in dependency order.
+
 ## Phase 2: Sidecar and IdP bridge (4-8 weeks)
 
 - `predicate-authorityd`.
@@ -609,6 +634,14 @@ Exit criteria:
 - compatibility mapping to existing `sdk-python` step lifecycle approved.
 - release orchestration design approved for multi-package PyPI publishing (`predicate-contracts` then `predicate-authority`).
 
+Current status: **partially complete**
+
+- [x] dependency graph/import boundaries documented in this proposal.
+- [x] package scaffolding started in this `predicate-authority` repository (`predicate-contracts`, `predicate-authority`).
+- [ ] formal design sign-off from SDK/platform/security.
+- [ ] versioned schema docs publication process.
+- [ ] approved compatibility mapping with `sdk-python` lifecycle owners.
+
 ## Phase 1: Local SDK Guard (MVP) (3-5 weeks)
 
 Objective: deliver immediate value with in-process pre-execution authority.
@@ -631,6 +664,18 @@ Exit criteria:
 - deterministic regression tests pass for authorize/deny paths.
 - developer quickstart validated end-to-end on local-only mode.
 - CI release pipeline can publish and verify `predicate-contracts` and `predicate-authority` in dependency order.
+
+Current status: **in progress**
+
+- [x] local `ActionGuard.authorize(...)`.
+- [x] signed local mandates.
+- [x] local policy evaluation.
+- [x] fail-closed deny path with normalized reason enums.
+- [x] deterministic regression tests for authorize/deny paths.
+- [x] `sdk-python` runtime integration hooks (typed adapter path).
+- [x] OpenTelemetry-native authority event export.
+- [x] quickstart/examples for browser/MCP/outbound HTTP.
+- [x] dependency-ordered package publish pipeline in CI (workflow scaffold).
 
 ## Phase 2: Sidecar + Identity Bridge (4-6 weeks)
 
@@ -657,6 +702,8 @@ Exit criteria:
 - bridge token exchange validated against at least one enterprise IdP.
 - sidecar survives restart/network partition with fail-closed guarantees.
 
+Current status: **not started (design only)**
+
 ## Phase 3: Hosted Governance Control Plane (6-8 weeks)
 
 Objective: ship monetizable cloud governance capabilities.
@@ -675,6 +722,8 @@ Exit criteria:
 - kill-switch propagation meets incident response target.
 - billable usage pipeline reconciles authority + snapshot credits accurately.
 
+Current status: **not started (design only)**
+
 ## Phase 4: Enterprise Hardening and Scale (ongoing, first 4-6 weeks)
 
 Objective: make it enterprise-ready for regulated production.
@@ -692,6 +741,8 @@ Exit criteria:
 - reference customer security review completed.
 - defined SLOs met in staging/load tests.
 - enterprise onboarding playbook validated with pilot accounts.
+
+Current status: **not started (design only)**
 
 ## Cross-Phase Dependencies
 

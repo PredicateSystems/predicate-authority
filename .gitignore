@@ -55,3 +55,7 @@ traces/
 artifacts/
 tmp/
 temp/
+
+# Local build artifacts from package-level builds
+predicate_authority/predicate_authority/
+predicate_contracts/predicate_contracts/

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "predicate-authority"
+version = "0.1.0"
+description = "Pre-execution authority enforcement runtime for AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Predicate Systems" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Typing :: Typed",
+]
+dependencies = [
+    "predicate-contracts>=0.1.0,<0.2.0",
+]
+
+[project.optional-dependencies]
+telemetry = ["opentelemetry-api>=1.24.0"]
+
+[tool.setuptools]
+packages = ["predicate_authority", "predicate_authority.integrations"]
+
+[tool.setuptools.package-dir]
+"predicate_authority" = "."
+"predicate_authority.integrations" = "integrations"
