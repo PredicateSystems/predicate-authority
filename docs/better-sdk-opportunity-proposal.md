@@ -22,7 +22,7 @@ Status snapshot date: 2026-02-16
 | Phase | Status | ETA | Owner |
 | --- | --- | --- | --- |
 | Phase 0: Architecture and Spec Lock | Partially complete | 1-2 weeks total (remaining: sign-off + schema/process formalization) | SDK + Platform + Security |
-| Phase 1: Local SDK Guard (MVP) | In progress | 3-5 weeks total (remaining: `sdk-python` hooks + OTel export + examples + CI publish flow) | SDK |
+| Phase 1: Local SDK Guard (MVP) | In progress (implementation-complete) | 3-5 weeks total (remaining: first production package release in dependency order) | SDK |
 | Phase 2: Sidecar + Identity Bridge | Not started (design only) | 4-6 weeks | Platform + Identity |
 | Phase 3: Hosted Governance Control Plane | Not started (design only) | 6-8 weeks | Platform + Product |
 | Phase 4: Enterprise Hardening and Scale | Not started (design only) | Ongoing (first 4-6 weeks) | Platform + Security + GTM |
@@ -523,17 +523,20 @@ async def web_search_tool(query: str):
 - Basic policy DSL.
 - Trace/proof event emission to existing tracer.
 
-Status (as of 2026-02-16): **in progress (MVP scaffold implemented in this `predicate-authority` repository)**
+Status (as of 2026-02-16): **in progress (MVP implemented; release execution pending)**
 
 - Completed in repo:
   - `predicate-contracts` package scaffold with typed contracts and protocols.
   - `predicate-authority` local `ActionGuard.authorize(...)` + `enforce(...)`.
   - Signed local mandates with TTL + verification.
   - Local policy evaluation and normalized deny reasons.
-  - In-memory proof ledger with optional trace emitter interface.
-  - pytest coverage for policy, mandate signing, and proof emission paths.
+  - In-memory proof ledger with optional OpenTelemetry trace emitter interface.
+  - typed `sdk-python` integration adapter path for pre-action authorization.
+  - pytest coverage for policy, mandate signing, integration, and proof/telemetry paths.
+  - package-level `pyproject.toml` for `predicate-contracts` and `predicate-authority`.
+  - CI workflows for tests and dependency-ordered publish.
+  - release runbook for PyPI publishing.
 - Remaining to close full Phase 1 exit:
-  - connect CI publish jobs to real package build/publish steps and credentials,
   - publish first `predicate-contracts` and `predicate-authority` versions in dependency order.
 
 ## Phase 2: Sidecar and IdP bridge (4-8 weeks)
@@ -665,7 +668,7 @@ Exit criteria:
 - developer quickstart validated end-to-end on local-only mode.
 - CI release pipeline can publish and verify `predicate-contracts` and `predicate-authority` in dependency order.
 
-Current status: **in progress**
+Current status: **in progress (implementation-complete)**
 
 - [x] local `ActionGuard.authorize(...)`.
 - [x] signed local mandates.
@@ -675,7 +678,10 @@ Current status: **in progress**
 - [x] `sdk-python` runtime integration hooks (typed adapter path).
 - [x] OpenTelemetry-native authority event export.
 - [x] quickstart/examples for browser/MCP/outbound HTTP.
-- [x] dependency-ordered package publish pipeline in CI (workflow scaffold).
+- [x] dependency-ordered package publish pipeline in CI.
+- [x] package-level `pyproject.toml` for both publishable packages.
+- [x] dedicated GitHub Actions test workflow.
+- [ ] first production releases published to PyPI in dependency order.
 
 ## Phase 2: Sidecar + Identity Bridge (4-6 weeks)
 
