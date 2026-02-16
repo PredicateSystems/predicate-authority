@@ -1,4 +1,4 @@
-# Pre-commit hooks for AgentIdentity repository
+# Pre-commit hooks for predicate-authority repository
 # Baseline adapted from /Code/Sentience/sdk-python/.pre-commit-config.yaml
 
 repos:

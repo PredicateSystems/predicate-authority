@@ -1,10 +1,13 @@
-.PHONY: hooks lint format format-python format-docs lint-docs
+.PHONY: hooks lint test format format-python format-docs lint-docs
 
 hooks:
 	pre-commit install
 
 lint:
 	pre-commit run --all-files
+
+test:
+	python -m pytest -q
 
 format: format-python format-docs
 
