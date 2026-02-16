@@ -23,6 +23,17 @@ This closes the confused-deputy gap where an agent can misuse delegated credenti
 - **Deterministic binding**: authority is tied to runtime evidence, not only identity.
 - **Provable controls**: each decision can emit signed proof events for audit pipelines.
 
+### Why not just use IdP directly?
+
+You should still use Entra/Okta/OIDC for identity and token issuance. `predicate-authority` adds the runtime control layer those systems do not provide by default for AI agents:
+
+- pre-execution allow/deny checks right before each sensitive action,
+- binding authority to current `state_hash` and `intent_hash`,
+- optional required verification labels from runtime checks (currently web-agent only via [predicate-sdk](https://github.com/PredicateSystems/sdk-python) integration),
+- fail-closed local enforcement and per-decision proof events.
+
+In practice: IdP answers **who the principal is**, while `predicate-authority` answers **whether this exact action is allowed right now in this state**.
+
 ## Repository Components
 
 | Package | Purpose |
@@ -38,7 +49,7 @@ Implemented in this repository:
 - local pre-execution `ActionGuard.authorize(...)` and `enforce(...)`,
 - signed local mandates with TTL (`LocalMandateSigner`),
 - policy evaluation with deny precedence and required verification labels,
-- typed `sdk-python` integration adapter (`predicate_authority.integrations`),
+- typed [predicate-sdk](https://github.com/PredicateSystems/sdk-python) integration adapter (`predicate_authority.integrations`),
 - OpenTelemetry-compatible trace emitter (`OpenTelemetryTraceEmitter`),
 - pytest coverage for core authorization, mandate, integration, and telemetry flows.
 
