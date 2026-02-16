@@ -60,7 +60,25 @@ print("ok", predicate_contracts.__name__, predicate_authority.__name__)
 PY
 ```
 
-## 5) Manual fallback publish (if needed)
+## 5) Optional: create git tags per package release
+
+Tags are not required for publishing in this repo, but they are recommended for traceability.
+
+Suggested tag format:
+
+- `predicate-contracts-vX.Y.Z`
+- `predicate-authority-vX.Y.Z`
+
+Example commands (after publish succeeds):
+
+```bash
+git tag -a predicate-contracts-v0.1.0 -m "predicate-contracts v0.1.0"
+git tag -a predicate-authority-v0.1.0 -m "predicate-authority v0.1.0"
+git push origin predicate-contracts-v0.1.0
+git push origin predicate-authority-v0.1.0
+```
+
+## 6) Manual fallback publish (if needed)
 
 ```bash
 python -m pip install --upgrade build twine
