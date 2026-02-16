@@ -532,11 +532,9 @@ Status (as of 2026-02-16): **in progress (MVP scaffold implemented in this `pred
   - Local policy evaluation and normalized deny reasons.
   - In-memory proof ledger with optional trace emitter interface.
   - pytest coverage for policy, mandate signing, and proof emission paths.
-- Pending for full Phase 1 exit:
-  - direct `sdk-python` integration hooks (pre-action + postcondition linkage),
-  - OpenTelemetry-native event export (beyond protocol-level trace emitter),
-  - developer quickstart/examples for browser/MCP/HTTP guard patterns,
-  - package publishing pipeline verification (`predicate-contracts` -> `predicate-authority`).
+- Remaining to close full Phase 1 exit:
+  - connect CI publish jobs to real package build/publish steps and credentials,
+  - publish first `predicate-contracts` and `predicate-authority` versions in dependency order.
 
 ## Phase 2: Sidecar and IdP bridge (4-8 weeks)
 
@@ -674,10 +672,10 @@ Current status: **in progress**
 - [x] local policy evaluation.
 - [x] fail-closed deny path with normalized reason enums.
 - [x] deterministic regression tests for authorize/deny paths.
-- [ ] `sdk-python` runtime integration hooks.
-- [ ] OpenTelemetry-native authority event export.
-- [ ] quickstart/examples for browser/MCP/outbound HTTP.
-- [ ] dependency-ordered package publish pipeline in CI.
+- [x] `sdk-python` runtime integration hooks (typed adapter path).
+- [x] OpenTelemetry-native authority event export.
+- [x] quickstart/examples for browser/MCP/outbound HTTP.
+- [x] dependency-ordered package publish pipeline in CI (workflow scaffold).
 
 ## Phase 2: Sidecar + Identity Bridge (4-6 weeks)
 

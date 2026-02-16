@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "predicate-contracts"
+version = "0.1.0"
+description = "Shared typed contracts for Predicate authority and integrations."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Predicate Systems" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Typing :: Typed",
+]
+
+[tool.setuptools]
+packages = ["predicate_contracts"]
+
+[tool.setuptools.package-dir]
+"predicate_contracts" = "."

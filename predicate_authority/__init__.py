@@ -4,6 +4,7 @@ from predicate_authority.guard import ActionExecutionResult, ActionGuard
 from predicate_authority.mandate import LocalMandateSigner
 from predicate_authority.policy import PolicyEngine, PolicyMatchResult
 from predicate_authority.proof import InMemoryProofLedger
+from predicate_authority.telemetry import OpenTelemetryTraceEmitter
 
 __all__ = [
     "ActionExecutionResult",
@@ -12,6 +13,7 @@ __all__ = [
     "IdentityBridge",
     "InMemoryProofLedger",
     "LocalMandateSigner",
+    "OpenTelemetryTraceEmitter",
     "PolicyEngine",
     "PolicyMatchResult",
     "TokenExchangeResult",
