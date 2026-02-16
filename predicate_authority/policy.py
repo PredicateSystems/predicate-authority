@@ -18,6 +18,9 @@ class PolicyEngine:
     def __init__(self, rules: tuple[PolicyRule, ...]) -> None:
         self._rules = rules
 
+    def replace_rules(self, rules: tuple[PolicyRule, ...]) -> None:
+        self._rules = rules
+
     def evaluate(self, request: ActionRequest) -> PolicyMatchResult:
         matching_rules = [rule for rule in self._rules if self._matches_rule(rule, request)]
         if not matching_rules:

@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "name": "allow-orders-http-post",
+      "effect": "allow",
+      "principals": ["agent:orders-*"],
+      "actions": ["http.post"],
+      "resources": ["https://api.vendor.com/orders"],
+      "required_labels": []
+    },
+    {
+      "name": "deny-admin-delete",
+      "effect": "deny",
+      "principals": ["agent:*"],
+      "actions": ["http.delete"],
+      "resources": ["https://api.vendor.com/admin/*"],
+      "required_labels": []
+    }
+  ]
+}
