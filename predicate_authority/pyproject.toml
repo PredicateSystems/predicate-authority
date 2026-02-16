@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
+predicate-authority = "predicate_authority.cli:main"
 predicate-authorityd = "predicate_authority.daemon:main"
 
 [project.optional-dependencies]

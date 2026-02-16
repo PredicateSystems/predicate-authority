@@ -64,9 +64,52 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not_found"})
 
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/policy/reload":
+            reloaded = self.server.daemon_ref.reload_policy_now()  # type: ignore[attr-defined]
+            self._send_json(200, {"reloaded": reloaded})
+            return
+        if parsed.path == "/revoke/principal":
+            payload = self._read_json_body()
+            principal_id = payload.get("principal_id")
+            if not isinstance(principal_id, str) or principal_id.strip() == "":
+                self._send_json(400, {"error": "principal_id is required"})
+                return
+            self.server.daemon_ref.revoke_principal(principal_id.strip())  # type: ignore[attr-defined]
+            self._send_json(200, {"ok": True, "principal_id": principal_id.strip()})
+            return
+        if parsed.path == "/revoke/intent":
+            payload = self._read_json_body()
+            intent_hash = payload.get("intent_hash")
+            if not isinstance(intent_hash, str) or intent_hash.strip() == "":
+                self._send_json(400, {"error": "intent_hash is required"})
+                return
+            self.server.daemon_ref.revoke_intent(intent_hash.strip())  # type: ignore[attr-defined]
+            self._send_json(200, {"ok": True, "intent_hash": intent_hash.strip()})
+            return
+        self._send_json(404, {"error": "not_found"})
+
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         # Keep daemon output deterministic and quiet by default.
         return
+
+    def _read_json_body(self) -> dict[str, Any]:
+        raw_length = self.headers.get("Content-Length", "0")
+        try:
+            content_length = int(raw_length)
+        except ValueError:
+            return {}
+        if content_length <= 0:
+            return {}
+        payload = self.rfile.read(content_length).decode("utf-8")
+        try:
+            loaded = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(loaded, dict):
+            return loaded
+        return {}
 
     def _send_json(self, code: int, payload: dict[str, Any]) -> None:
         encoded = json.dumps(payload).encode("utf-8")
@@ -142,6 +185,19 @@ class PredicateAuthorityDaemon:
             }
         )
         return payload
+
+    def reload_policy_now(self) -> bool:
+        changed = self._sidecar.hot_reload_policy()
+        if changed:
+            self._runtime.policy_reload_count += 1
+            self._runtime.last_policy_reload_epoch_s = time.time()
+        return changed
+
+    def revoke_principal(self, principal_id: str) -> None:
+        self._sidecar.revoke_by_invariant(principal_id)
+
+    def revoke_intent(self, intent_hash: str) -> None:
+        self._sidecar.revoke_intent_hash(intent_hash)
 
     def _policy_poll_loop(self) -> None:
         while not self._stop_event.is_set():

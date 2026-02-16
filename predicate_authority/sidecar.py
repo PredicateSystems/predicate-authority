@@ -131,6 +131,9 @@ class PredicateAuthoritySidecar:
     def revoke_by_invariant(self, principal_id: str) -> None:
         self._revocation_cache.revoke_principal(principal_id)
 
+    def revoke_intent_hash(self, intent_hash: str) -> None:
+        self._revocation_cache.revoke_intent_hash(intent_hash)
+
     def hot_reload_policy(self) -> bool:
         if self._policy_source is None:
             return False
