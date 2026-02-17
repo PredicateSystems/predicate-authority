@@ -5,7 +5,9 @@ from enum import Enum
 from typing import Protocol, cast
 
 from predicate_authority.bridge import TokenExchangeResult
+from predicate_authority.control_plane import ControlPlaneTraceEmitter
 from predicate_authority.guard import ActionGuard
+from predicate_authority.local_identity import LocalIdentityRegistry
 from predicate_authority.policy import PolicyEngine
 from predicate_authority.policy_source import PolicyFileSource
 from predicate_authority.proof import InMemoryProofLedger
@@ -17,6 +19,7 @@ from predicate_contracts import (
     AuthorizationReason,
     PrincipalRef,
     StateEvidence,
+    TraceEmitter,
 )
 
 
@@ -39,6 +42,19 @@ class SidecarStatus:
     revoked_intent_count: int
     revoked_mandate_count: int
     proof_event_count: int
+    control_plane_emitter_attached: bool
+    control_plane_audit_push_success_count: int = 0
+    control_plane_audit_push_failure_count: int = 0
+    control_plane_usage_push_success_count: int = 0
+    control_plane_usage_push_failure_count: int = 0
+    control_plane_last_push_error: str | None = None
+    local_identity_registry_enabled: bool = False
+    local_identity_total_count: int = 0
+    local_identity_active_count: int = 0
+    local_flush_queue_pending_count: int = 0
+    local_flush_queue_flushed_count: int = 0
+    local_flush_queue_failed_count: int = 0
+    local_flush_queue_quarantined_count: int = 0
 
 
 class SidecarError(RuntimeError):
@@ -67,6 +83,7 @@ class PredicateAuthoritySidecar:
         credential_store: LocalCredentialStore,
         revocation_cache: LocalRevocationCache,
         policy_engine: PolicyEngine,
+        local_identity_registry: LocalIdentityRegistry | None = None,
     ) -> None:
         self._config = config
         self._action_guard = action_guard
@@ -75,6 +92,7 @@ class PredicateAuthoritySidecar:
         self._credential_store = credential_store
         self._revocation_cache = revocation_cache
         self._policy_engine = policy_engine
+        self._local_identity_registry = local_identity_registry
         self._policy_source = (
             PolicyFileSource(config.policy_file_path)
             if config.policy_file_path is not None
@@ -144,6 +162,15 @@ class PredicateAuthoritySidecar:
         return False
 
     def status(self) -> SidecarStatus:
+        trace_emitter = self._proof_ledger.trace_emitter
+        control_plane_payload: dict[str, int | str | None] = {}
+        control_plane_attached = False
+        if isinstance(trace_emitter, ControlPlaneTraceEmitter):
+            control_plane_attached = True
+            control_plane_payload = trace_emitter.status_payload()
+        local_stats = (
+            self._local_identity_registry.stats() if self._local_identity_registry else None
+        )
         return SidecarStatus(
             mode=self._config.mode,
             policy_hot_reload_enabled=self._policy_source is not None,
@@ -151,4 +178,39 @@ class PredicateAuthoritySidecar:
             revoked_intent_count=len(self._revocation_cache.revoked_intent_hashes),
             revoked_mandate_count=len(self._revocation_cache.revoked_mandate_ids),
             proof_event_count=len(self._proof_ledger.events),
+            control_plane_emitter_attached=control_plane_attached,
+            control_plane_audit_push_success_count=int(
+                control_plane_payload.get("control_plane_audit_push_success_count", 0)
+            ),
+            control_plane_audit_push_failure_count=int(
+                control_plane_payload.get("control_plane_audit_push_failure_count", 0)
+            ),
+            control_plane_usage_push_success_count=int(
+                control_plane_payload.get("control_plane_usage_push_success_count", 0)
+            ),
+            control_plane_usage_push_failure_count=int(
+                control_plane_payload.get("control_plane_usage_push_failure_count", 0)
+            ),
+            control_plane_last_push_error=(
+                str(control_plane_payload["control_plane_last_push_error"])
+                if control_plane_payload.get("control_plane_last_push_error") is not None
+                else None
+            ),
+            local_identity_registry_enabled=self._local_identity_registry is not None,
+            local_identity_total_count=(local_stats.total_identity_count if local_stats else 0),
+            local_identity_active_count=(local_stats.active_identity_count if local_stats else 0),
+            local_flush_queue_pending_count=(
+                local_stats.pending_flush_queue_count if local_stats else 0
+            ),
+            local_flush_queue_flushed_count=(local_stats.flushed_queue_count if local_stats else 0),
+            local_flush_queue_failed_count=(local_stats.failed_queue_count if local_stats else 0),
+            local_flush_queue_quarantined_count=(
+                local_stats.quarantined_queue_count if local_stats else 0
+            ),
         )
+
+    def local_identity_registry(self) -> LocalIdentityRegistry | None:
+        return self._local_identity_registry
+
+    def trace_emitter(self) -> TraceEmitter | None:
+        return self._proof_ledger.trace_emitter

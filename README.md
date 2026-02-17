@@ -150,6 +150,93 @@ predicate-authority revoke intent --host 127.0.0.1 --port 8787 --hash <intent_ha
 predicate-authorityd --host 127.0.0.1 --port 8787 --mode local_only --policy-file examples/authorityd/policy.json
 ```
 
+### Identity mode options (`predicate-authorityd`)
+
+- `--identity-mode local`: deterministic local bridge (default).
+- `--identity-mode local-idp`: local IdP-style signed token mode for dev/air-gapped workflows.
+- `--identity-mode oidc`: enterprise OIDC bridge mode.
+- `--identity-mode entra`: Microsoft Entra bridge mode.
+
+Example (`local-idp`):
+
+```bash
+export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
+predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --identity-mode local-idp \
+  --local-idp-issuer "http://localhost/predicate-local-idp" \
+  --local-idp-audience "api://predicate-authority"
+```
+
+### Local identity registry (ephemeral + TTL + flush queue)
+
+Enable sidecar-managed local task identities and local ledger queue:
+
+```bash
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --identity-mode local-idp \
+  --local-identity-enabled \
+  --local-identity-registry-file ./.predicate-authorityd/local-identities.json \
+  --local-identity-default-ttl-s 900 \
+  --flush-worker-enabled \
+  --flush-worker-interval-s 2.0 \
+  --flush-worker-max-batch-size 50 \
+  --flush-worker-dead-letter-max-attempts 5
+```
+
+Runtime endpoints:
+
+- `POST /identity/task` (issue ephemeral task identity)
+- `GET /identity/list` (list identities)
+- `POST /identity/revoke` (revoke identity)
+- `GET /ledger/flush-queue` (inspect pending local ledger queue)
+- `GET /ledger/dead-letter` (list quarantined queue items only)
+- `POST /ledger/flush-ack` (mark queue item as flushed)
+- `POST /ledger/flush-now` (manually trigger immediate queue flush)
+- `POST /ledger/requeue` (requeue quarantined item for retry)
+
+Background flush worker status fields:
+
+- `flush_cycle_count`
+- `flush_sent_count`
+- `flush_failed_count`
+- `flush_quarantined_count`
+- `last_flush_epoch_s`
+- `last_flush_error`
+
+### How to run with control-plane shipping (out-of-the-box)
+
+```bash
+export CONTROL_PLANE_URL="http://127.0.0.1:8080"
+export CONTROL_PLANE_TENANT_ID="dev-tenant"
+export CONTROL_PLANE_PROJECT_ID="dev-project"
+export CONTROL_PLANE_AUTH_TOKEN="<bearer-token>"
+
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --control-plane-enabled \
+  --control-plane-fail-open
+```
+
+The `/status` endpoint now includes:
+
+- `control_plane_emitter_attached`
+- `control_plane_audit_push_success_count`
+- `control_plane_audit_push_failure_count`
+- `control_plane_usage_push_success_count`
+- `control_plane_usage_push_failure_count`
+- `control_plane_last_push_error`
+
 ## Security: Local Kill-Switch Path
 
 `predicate-authority` supports fail-closed checks, local proof emission, and sidecar-managed revocation/token lifecycle for long-running agents.
