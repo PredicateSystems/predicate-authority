@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import threading
 import time
@@ -11,14 +12,32 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from predicate_authority.bridge import IdentityBridge
+from predicate_authority.bridge import (
+    EntraBridgeConfig,
+    EntraIdentityBridge,
+    IdentityBridge,
+    LocalIdPBridge,
+    LocalIdPBridgeConfig,
+    OIDCBridgeConfig,
+    OIDCIdentityBridge,
+)
+from predicate_authority.control_plane import (
+    ControlPlaneClient,
+    ControlPlaneClientConfig,
+    ControlPlaneTraceEmitter,
+)
 from predicate_authority.guard import ActionGuard
 from predicate_authority.mandate import LocalMandateSigner
 from predicate_authority.policy import PolicyEngine
 from predicate_authority.policy_source import PolicyFileSource
 from predicate_authority.proof import InMemoryProofLedger
 from predicate_authority.revocation import LocalRevocationCache
-from predicate_authority.sidecar import AuthorityMode, PredicateAuthoritySidecar, SidecarConfig
+from predicate_authority.sidecar import (
+    AuthorityMode,
+    ExchangeTokenBridge,
+    PredicateAuthoritySidecar,
+    SidecarConfig,
+)
 from predicate_authority.sidecar_store import LocalCredentialStore
 from predicate_contracts import PolicyRule
 
@@ -28,6 +47,20 @@ class DaemonConfig:
     host: str = "127.0.0.1"
     port: int = 8787
     policy_poll_interval_s: float = 2.0
+
+
+@dataclass(frozen=True)
+class ControlPlaneBootstrapConfig:
+    enabled: bool = False
+    base_url: str | None = None
+    tenant_id: str = "dev-tenant"
+    project_id: str = "dev-project"
+    auth_token: str | None = None
+    timeout_s: float = 2.0
+    max_retries: int = 2
+    backoff_initial_s: float = 0.2
+    fail_open: bool = True
+    usage_credits_per_decision: int = 1
 
 
 @dataclass
@@ -213,13 +246,42 @@ class PredicateAuthorityDaemon:
 
 
 def _build_default_sidecar(
-    mode: AuthorityMode, policy_file: str | None, credential_store_file: str
+    mode: AuthorityMode,
+    policy_file: str | None,
+    credential_store_file: str,
+    control_plane_config: ControlPlaneBootstrapConfig | None = None,
+    identity_bridge: ExchangeTokenBridge | None = None,
 ) -> PredicateAuthoritySidecar:
     policy_rules: tuple[PolicyRule, ...] = ()
     if policy_file is not None and Path(policy_file).exists():
         policy_rules = PolicyFileSource(policy_file).load_rules()
     policy_engine = PolicyEngine(rules=policy_rules)
-    proof_ledger = InMemoryProofLedger()
+
+    trace_emitter = None
+    if (
+        control_plane_config is not None
+        and control_plane_config.enabled
+        and control_plane_config.base_url is not None
+    ):
+        control_plane_client = ControlPlaneClient(
+            config=ControlPlaneClientConfig(
+                base_url=control_plane_config.base_url,
+                tenant_id=control_plane_config.tenant_id,
+                project_id=control_plane_config.project_id,
+                auth_token=control_plane_config.auth_token,
+                timeout_s=control_plane_config.timeout_s,
+                max_retries=control_plane_config.max_retries,
+                backoff_initial_s=control_plane_config.backoff_initial_s,
+                fail_open=control_plane_config.fail_open,
+            )
+        )
+        trace_emitter = ControlPlaneTraceEmitter(
+            client=control_plane_client,
+            emit_usage_credits=True,
+            usage_credits_per_decision=control_plane_config.usage_credits_per_decision,
+        )
+    proof_ledger = InMemoryProofLedger(trace_emitter=trace_emitter)
+
     guard = ActionGuard(
         policy_engine=policy_engine,
         mandate_signer=LocalMandateSigner(secret_key=secrets.token_hex(32)),
@@ -229,11 +291,58 @@ def _build_default_sidecar(
         config=SidecarConfig(mode=mode, policy_file_path=policy_file),
         action_guard=guard,
         proof_ledger=proof_ledger,
-        identity_bridge=IdentityBridge(),
+        identity_bridge=identity_bridge or IdentityBridge(),
         credential_store=LocalCredentialStore(credential_store_file),
         revocation_cache=LocalRevocationCache(),
         policy_engine=policy_engine,
     )
+
+
+def _build_identity_bridge_from_args(args: argparse.Namespace) -> ExchangeTokenBridge:
+    mode = str(args.identity_mode)
+    if mode == "local":
+        return IdentityBridge(token_ttl_seconds=int(args.idp_token_ttl_s))
+    if mode == "local-idp":
+        signing_key = os.getenv(args.local_idp_signing_key_env, "predicate-local-idp-dev-key")
+        return LocalIdPBridge(
+            LocalIdPBridgeConfig(
+                issuer=str(args.local_idp_issuer),
+                audience=str(args.local_idp_audience),
+                signing_key=signing_key,
+                token_ttl_seconds=int(args.idp_token_ttl_s),
+            )
+        )
+    if mode == "oidc":
+        if args.oidc_issuer is None or args.oidc_client_id is None or args.oidc_audience is None:
+            raise SystemExit(
+                "identity-mode=oidc requires --oidc-issuer, --oidc-client-id, and --oidc-audience."
+            )
+        return OIDCIdentityBridge(
+            OIDCBridgeConfig(
+                issuer=str(args.oidc_issuer),
+                client_id=str(args.oidc_client_id),
+                audience=str(args.oidc_audience),
+                token_ttl_seconds=int(args.idp_token_ttl_s),
+            )
+        )
+    if mode == "entra":
+        if (
+            args.entra_tenant_id is None
+            or args.entra_client_id is None
+            or args.entra_audience is None
+        ):
+            raise SystemExit(
+                "identity-mode=entra requires --entra-tenant-id, --entra-client-id, and --entra-audience."
+            )
+        return EntraIdentityBridge(
+            EntraBridgeConfig(
+                tenant_id=str(args.entra_tenant_id),
+                client_id=str(args.entra_client_id),
+                audience=str(args.entra_audience),
+                token_ttl_seconds=int(args.idp_token_ttl_s),
+            )
+        )
+    raise SystemExit(f"Unsupported identity mode: {mode}")
 
 
 def main() -> None:
@@ -251,13 +360,109 @@ def main() -> None:
         "--credential-store-file",
         default=str(Path.home() / ".predicate-authorityd" / "credentials.json"),
     )
+    parser.add_argument(
+        "--identity-mode",
+        choices=["local", "local-idp", "oidc", "entra"],
+        default="local",
+        help="Identity source for token exchange: local, local-idp, oidc, or entra.",
+    )
+    parser.add_argument("--idp-token-ttl-s", type=int, default=300)
+    parser.add_argument(
+        "--local-idp-issuer",
+        default=os.getenv("LOCAL_IDP_ISSUER", "http://localhost/predicate-local-idp"),
+    )
+    parser.add_argument(
+        "--local-idp-audience",
+        default=os.getenv("LOCAL_IDP_AUDIENCE", "api://predicate-authority"),
+    )
+    parser.add_argument(
+        "--local-idp-signing-key-env",
+        default="LOCAL_IDP_SIGNING_KEY",
+        help="Env var name for Local IdP signing key.",
+    )
+    parser.add_argument("--oidc-issuer", default=os.getenv("OIDC_ISSUER"))
+    parser.add_argument("--oidc-client-id", default=os.getenv("OIDC_CLIENT_ID"))
+    parser.add_argument("--oidc-audience", default=os.getenv("OIDC_AUDIENCE"))
+    parser.add_argument("--entra-tenant-id", default=os.getenv("ENTRA_TENANT_ID"))
+    parser.add_argument("--entra-client-id", default=os.getenv("ENTRA_CLIENT_ID"))
+    parser.add_argument("--entra-audience", default=os.getenv("ENTRA_AUDIENCE"))
+    parser.add_argument(
+        "--control-plane-enabled",
+        action="store_true",
+        help="Enable control-plane audit/usage shipping via trace emitter.",
+    )
+    parser.add_argument(
+        "--control-plane-url",
+        default=None,
+        help="Control plane base URL (e.g. https://authority.example.com).",
+    )
+    parser.add_argument(
+        "--control-plane-tenant-id",
+        default=None,
+        help="Tenant ID for emitted audit/usage records.",
+    )
+    parser.add_argument(
+        "--control-plane-project-id",
+        default=None,
+        help="Project ID for emitted usage records.",
+    )
+    parser.add_argument(
+        "--control-plane-auth-token-env",
+        default="CONTROL_PLANE_AUTH_TOKEN",
+        help="Env var name that stores Bearer token for control-plane APIs.",
+    )
+    parser.add_argument("--control-plane-timeout-s", type=float, default=2.0)
+    parser.add_argument("--control-plane-max-retries", type=int, default=2)
+    parser.add_argument("--control-plane-backoff-initial-s", type=float, default=0.2)
+    parser.add_argument(
+        "--control-plane-fail-open",
+        action="store_true",
+        help="If true, local authorization continues when control-plane push fails.",
+    )
+    parser.add_argument(
+        "--control-plane-fail-closed",
+        dest="control_plane_fail_open",
+        action="store_false",
+        help="If set, control-plane push failures become hard errors.",
+    )
+    parser.set_defaults(control_plane_fail_open=True)
+    parser.add_argument("--control-plane-usage-credits-per-decision", type=int, default=1)
     args = parser.parse_args()
 
     mode = AuthorityMode(args.mode)
+    control_plane_auth_token = os.getenv(args.control_plane_auth_token_env)
+    control_plane_url = args.control_plane_url or os.getenv("CONTROL_PLANE_URL")
+    control_plane_tenant = args.control_plane_tenant_id or os.getenv(
+        "CONTROL_PLANE_TENANT_ID", "dev-tenant"
+    )
+    control_plane_project = args.control_plane_project_id or os.getenv(
+        "CONTROL_PLANE_PROJECT_ID", "dev-project"
+    )
+    control_plane_enabled = bool(args.control_plane_enabled)
+    if control_plane_enabled and (control_plane_url is None or control_plane_url.strip() == ""):
+        raise SystemExit(
+            "control-plane is enabled but no URL provided. "
+            "Set --control-plane-url or CONTROL_PLANE_URL."
+        )
+    control_plane_bootstrap = ControlPlaneBootstrapConfig(
+        enabled=control_plane_enabled,
+        base_url=control_plane_url,
+        tenant_id=control_plane_tenant,
+        project_id=control_plane_project,
+        auth_token=control_plane_auth_token,
+        timeout_s=args.control_plane_timeout_s,
+        max_retries=args.control_plane_max_retries,
+        backoff_initial_s=args.control_plane_backoff_initial_s,
+        fail_open=bool(args.control_plane_fail_open),
+        usage_credits_per_decision=max(0, int(args.control_plane_usage_credits_per_decision)),
+    )
+    identity_bridge = _build_identity_bridge_from_args(args)
     sidecar = _build_default_sidecar(
         mode=mode,
         policy_file=args.policy_file,
         credential_store_file=args.credential_store_file,
+        control_plane_config=control_plane_bootstrap,
+        identity_bridge=identity_bridge,
     )
     daemon = PredicateAuthorityDaemon(
         sidecar=sidecar,
@@ -270,7 +475,8 @@ def main() -> None:
     daemon.start()
     print(
         f"predicate-authorityd listening on http://{args.host}:{daemon.bound_port} "
-        f"(mode={mode.value})"
+        f"(mode={mode.value}, identity_mode={args.identity_mode}, "
+        f"control_plane_enabled={control_plane_enabled})"
     )
     try:
         while True:

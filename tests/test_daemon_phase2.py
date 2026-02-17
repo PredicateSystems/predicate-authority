@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
+import threading
 import time
+from argparse import Namespace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from predicate_authority import (
@@ -20,7 +25,20 @@ from predicate_authority import (
     PredicateAuthoritySidecar,
     SidecarConfig,
 )
-from predicate_contracts import PolicyEffect, PolicyRule
+from predicate_authority.daemon import (
+    ControlPlaneBootstrapConfig,
+    _build_default_sidecar,
+    _build_identity_bridge_from_args,
+)
+from predicate_contracts import (
+    ActionRequest,
+    ActionSpec,
+    PolicyEffect,
+    PolicyRule,
+    PrincipalRef,
+    StateEvidence,
+    VerificationEvidence,
+)
 
 # pylint: disable=import-error
 
@@ -188,3 +206,131 @@ def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> N
         assert int(status["revoked_intent_count"]) >= 1
     finally:
         daemon.stop()
+
+
+class _ControlPlaneHandler(BaseHTTPRequestHandler):
+    requests: list[tuple[str, dict[str, object], dict[str, str]]]
+
+    def do_POST(self) -> None:  # noqa: N802
+        raw_length = self.headers.get("Content-Length", "0")
+        content_length = int(raw_length) if raw_length.isdigit() else 0
+        payload_raw = (
+            self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+        )
+        loaded = json.loads(payload_raw)
+        assert isinstance(loaded, dict)
+        self.requests.append((self.path, loaded, dict(self.headers.items())))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+        return
+
+
+def _start_control_plane_server() -> tuple[ThreadingHTTPServer, threading.Thread]:
+    class BoundHandler(_ControlPlaneHandler):
+        requests = []
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BoundHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def test_daemon_bootstrap_wires_control_plane_emitter(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server, _ = _start_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=base_url,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="test-token",
+                fail_open=False,
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=0.2),
+        )
+        daemon.start()
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:test"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="abc123"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+        # Emitter sends both audit and usage payloads.
+        handler_cls = server.RequestHandlerClass
+        requests = getattr(handler_cls, "requests")
+        assert isinstance(requests, list)
+        paths = [item[0] for item in requests]
+        assert "/v1/audit/events:batch" in paths
+        assert "/v1/metering/usage:batch" in paths
+        assert any(item[2].get("Authorization") == "Bearer test-token" for item in requests)
+        daemon_status = _fetch_json(f"http://127.0.0.1:{daemon.bound_port}/status")
+        assert daemon_status["control_plane_emitter_attached"] is True
+        assert int(daemon_status["control_plane_audit_push_success_count"]) >= 1
+        assert int(daemon_status["control_plane_usage_push_success_count"]) >= 1
+        assert int(daemon_status["control_plane_audit_push_failure_count"]) == 0
+        assert int(daemon_status["control_plane_usage_push_failure_count"]) == 0
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
+def test_daemon_identity_mode_local_idp_builder() -> None:
+    os.environ["LOCAL_IDP_SIGNING_KEY"] = "daemon-local-idp-key"
+    args = Namespace(
+        identity_mode="local-idp",
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+    )
+    bridge = _build_identity_bridge_from_args(args)
+    token = bridge.exchange_token(
+        PrincipalRef(principal_id="agent:test"),
+        StateEvidence(source="test", state_hash="state-1"),
+    )
+    assert token.provider.value == "local_idp"
+    assert len(token.access_token.split(".")) == 3

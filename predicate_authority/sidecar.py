@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Protocol, cast
 
 from predicate_authority.bridge import TokenExchangeResult
+from predicate_authority.control_plane import ControlPlaneTraceEmitter
 from predicate_authority.guard import ActionGuard
 from predicate_authority.policy import PolicyEngine
 from predicate_authority.policy_source import PolicyFileSource
@@ -39,6 +40,12 @@ class SidecarStatus:
     revoked_intent_count: int
     revoked_mandate_count: int
     proof_event_count: int
+    control_plane_emitter_attached: bool
+    control_plane_audit_push_success_count: int = 0
+    control_plane_audit_push_failure_count: int = 0
+    control_plane_usage_push_success_count: int = 0
+    control_plane_usage_push_failure_count: int = 0
+    control_plane_last_push_error: str | None = None
 
 
 class SidecarError(RuntimeError):
@@ -144,6 +151,12 @@ class PredicateAuthoritySidecar:
         return False
 
     def status(self) -> SidecarStatus:
+        trace_emitter = self._proof_ledger.trace_emitter
+        control_plane_payload: dict[str, int | str | None] = {}
+        control_plane_attached = False
+        if isinstance(trace_emitter, ControlPlaneTraceEmitter):
+            control_plane_attached = True
+            control_plane_payload = trace_emitter.status_payload()
         return SidecarStatus(
             mode=self._config.mode,
             policy_hot_reload_enabled=self._policy_source is not None,
@@ -151,4 +164,22 @@ class PredicateAuthoritySidecar:
             revoked_intent_count=len(self._revocation_cache.revoked_intent_hashes),
             revoked_mandate_count=len(self._revocation_cache.revoked_mandate_ids),
             proof_event_count=len(self._proof_ledger.events),
+            control_plane_emitter_attached=control_plane_attached,
+            control_plane_audit_push_success_count=int(
+                control_plane_payload.get("control_plane_audit_push_success_count", 0)
+            ),
+            control_plane_audit_push_failure_count=int(
+                control_plane_payload.get("control_plane_audit_push_failure_count", 0)
+            ),
+            control_plane_usage_push_success_count=int(
+                control_plane_payload.get("control_plane_usage_push_success_count", 0)
+            ),
+            control_plane_usage_push_failure_count=int(
+                control_plane_payload.get("control_plane_usage_push_failure_count", 0)
+            ),
+            control_plane_last_push_error=(
+                str(control_plane_payload["control_plane_last_push_error"])
+                if control_plane_payload.get("control_plane_last_push_error") is not None
+                else None
+            ),
         )

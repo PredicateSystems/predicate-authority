@@ -3,9 +3,18 @@ from predicate_authority.bridge import (
     EntraIdentityBridge,
     IdentityBridge,
     IdentityProviderType,
+    LocalIdPBridge,
+    LocalIdPBridgeConfig,
     OIDCBridgeConfig,
     OIDCIdentityBridge,
     TokenExchangeResult,
+)
+from predicate_authority.control_plane import (
+    AuditEventEnvelope,
+    ControlPlaneClient,
+    ControlPlaneClientConfig,
+    ControlPlaneTraceEmitter,
+    UsageCreditRecord,
 )
 from predicate_authority.daemon import DaemonConfig, PredicateAuthorityDaemon
 from predicate_authority.errors import AuthorizationDeniedError
@@ -30,6 +39,10 @@ __all__ = [
     "ActionGuard",
     "AuthorityMode",
     "AuthorizationDeniedError",
+    "AuditEventEnvelope",
+    "ControlPlaneClient",
+    "ControlPlaneClientConfig",
+    "ControlPlaneTraceEmitter",
     "CredentialRecord",
     "DaemonConfig",
     "EntraBridgeConfig",
@@ -37,6 +50,8 @@ __all__ = [
     "IdentityBridge",
     "IdentityProviderType",
     "InMemoryProofLedger",
+    "LocalIdPBridge",
+    "LocalIdPBridgeConfig",
     "LocalCredentialStore",
     "LocalMandateSigner",
     "LocalRevocationCache",
@@ -53,4 +68,5 @@ __all__ = [
     "SidecarError",
     "SidecarStatus",
     "TokenExchangeResult",
+    "UsageCreditRecord",
 ]
