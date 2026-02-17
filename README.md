@@ -123,6 +123,37 @@ See runnable examples in:
 - `examples/mcp_tool_guard_example.py`
 - `examples/outbound_http_guard_example.py`
 
+## Operations CLI (Phase 2)
+
+`predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
+
+### Sidecar health and status
+
+```bash
+predicate-authority sidecar health --host 127.0.0.1 --port 8787
+predicate-authority sidecar status --host 127.0.0.1 --port 8787
+```
+
+### Policy validation and reload
+
+```bash
+predicate-authority policy validate --file examples/authorityd/policy.json
+predicate-authority policy reload --host 127.0.0.1 --port 8787
+```
+
+### Revocation controls
+
+```bash
+predicate-authority revoke principal --host 127.0.0.1 --port 8787 --id agent:orders-01
+predicate-authority revoke intent --host 127.0.0.1 --port 8787 --hash <intent_hash>
+```
+
+### Daemon startup
+
+```bash
+predicate-authorityd --host 127.0.0.1 --port 8787 --mode local_only --policy-file examples/authorityd/policy.json
+```
+
 ## Security: Local Kill-Switch Path
 
 The current Phase 1 runtime supports fail-closed checks and local proof emission. The sidecar model (`predicate-authorityd`) is planned to provide instant local revocation and managed token lifecycle for long-running production agents.

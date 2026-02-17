@@ -1,4 +1,4 @@
-# Phase 1 Examples
+# Examples
 
 These scripts show the intended local guard patterns for Phase 1:
 
@@ -12,4 +12,27 @@ Run with:
 PYTHONPATH=. python examples/browser_guard_example.py
 PYTHONPATH=. python examples/mcp_tool_guard_example.py
 PYTHONPATH=. python examples/outbound_http_guard_example.py
+```
+
+## `predicate-authorityd` operations example (Phase 2)
+
+- `authorityd/policy.json`: sample sidecar policy file.
+- `authorityd/daemon_endpoint_check.py`: checks `/health` and `/status` endpoints.
+
+Start daemon:
+
+```bash
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --policy-poll-interval-s 2.0 \
+  --credential-store-file ./.predicate-authorityd/credentials.json
+```
+
+Check endpoints:
+
+```bash
+PYTHONPATH=. python examples/authorityd/daemon_endpoint_check.py
 ```
