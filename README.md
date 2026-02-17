@@ -40,9 +40,9 @@ In practice: IdP answers **who the principal is**, while `predicate-authority` a
 | --- | --- |
 | `predicate_contracts` | Shared typed contracts and protocols (`ActionRequest`, `PolicyRule`, evidence, decision/proof models). |
 | `predicate_authority` | Runtime authorization engine (`PolicyEngine`, `ActionGuard`, mandate signing, proof ledger, telemetry emitter). |
-| `examples/` | Browser/MCP/HTTP guard examples using the local Phase 1 runtime. |
+| `examples/` | Browser/MCP/HTTP/sidecar examples for local and connected workflows. |
 
-## Phase 1 Status
+## Current Capabilities
 
 Implemented in this repository:
 
@@ -51,13 +51,9 @@ Implemented in this repository:
 - policy evaluation with deny precedence and required verification labels,
 - typed [predicate-sdk](https://github.com/PredicateSystems/sdk-python) integration adapter (`predicate_authority.integrations`),
 - OpenTelemetry-compatible trace emitter (`OpenTelemetryTraceEmitter`),
-- pytest coverage for core authorization, mandate, integration, and telemetry flows.
-
-Planned in upcoming phases:
-
-- `predicate-authorityd` sidecar for token lifecycle and local kill-switch,
-- enterprise IdP bridge hardening (Entra/Okta/OIDC adapters),
-- hosted governance control plane.
+- `predicate-authorityd` sidecar daemon with policy polling and health/status endpoints,
+- ops-focused CLI commands for sidecar health/status, policy validate/reload, and revoke controls,
+- pytest coverage for authorization, mandate, integration, telemetry, daemon, and CLI flows.
 
 ## Installation
 
@@ -71,7 +67,7 @@ For shared contracts directly:
 pip install predicate-contracts
 ```
 
-## Quick Start (Phase 1 API)
+## Quick Start
 
 ```python
 from predicate_authority import ActionGuard, InMemoryProofLedger, LocalMandateSigner, PolicyEngine
@@ -123,7 +119,7 @@ See runnable examples in:
 - `examples/mcp_tool_guard_example.py`
 - `examples/outbound_http_guard_example.py`
 
-## Operations CLI (Phase 2)
+## Operations CLI
 
 `predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
 
@@ -156,7 +152,7 @@ predicate-authorityd --host 127.0.0.1 --port 8787 --mode local_only --policy-fil
 
 ## Security: Local Kill-Switch Path
 
-The current Phase 1 runtime supports fail-closed checks and local proof emission. The sidecar model (`predicate-authorityd`) is planned to provide instant local revocation and managed token lifecycle for long-running production agents.
+`predicate-authority` supports fail-closed checks, local proof emission, and sidecar-managed revocation/token lifecycle for long-running agents.
 
 ## Release
 
