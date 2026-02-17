@@ -27,6 +27,8 @@ from predicate_authority import (
 )
 from predicate_authority.daemon import (
     ControlPlaneBootstrapConfig,
+    FlushWorkerConfig,
+    LocalIdentityBootstrapConfig,
     _build_default_sidecar,
     _build_identity_bridge_from_args,
 )
@@ -94,7 +96,7 @@ def _fetch_json(url: str) -> dict[str, object]:
     return loaded
 
 
-def _post_json(url: str, body: dict[str, str] | None = None) -> dict[str, object]:
+def _post_json(url: str, body: dict[str, object] | None = None) -> dict[str, object]:
     parsed = urlsplit(url)
     path = parsed.path or "/"
     payload = json.dumps(body or {})
@@ -239,6 +241,33 @@ def _start_control_plane_server() -> tuple[ThreadingHTTPServer, threading.Thread
     return server, thread
 
 
+def _start_failing_control_plane_server() -> tuple[ThreadingHTTPServer, threading.Thread]:
+    class FailingHandler(BaseHTTPRequestHandler):
+        requests: list[tuple[str, dict[str, object], dict[str, str]]] = []
+
+        def do_POST(self) -> None:  # noqa: N802
+            raw_length = self.headers.get("Content-Length", "0")
+            content_length = int(raw_length) if raw_length.isdigit() else 0
+            payload_raw = (
+                self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            )
+            loaded = json.loads(payload_raw)
+            assert isinstance(loaded, dict)
+            self.requests.append((self.path, loaded, dict(self.headers.items())))
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"temporary_failure"}')
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FailingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
 def test_daemon_bootstrap_wires_control_plane_emitter(tmp_path: Path) -> None:
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
@@ -334,3 +363,317 @@ def test_daemon_identity_mode_local_idp_builder() -> None:
     )
     assert token.provider.value == "local_idp"
     assert len(token.access_token.split(".")) == 3
+
+
+def test_daemon_local_identity_registry_endpoints(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
+    sidecar = _build_default_sidecar(
+        mode=AuthorityMode.LOCAL_ONLY,
+        policy_file=str(policy_file),
+        credential_store_file=str(tmp_path / "credentials.json"),
+        local_identity_config=LocalIdentityBootstrapConfig(
+            enabled=True,
+            registry_file_path=str(tmp_path / "local-identities.json"),
+            default_ttl_seconds=60,
+        ),
+    )
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+    )
+    daemon.start()
+    try:
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        created = _post_json(
+            f"{base_url}/identity/task",
+            {"principal_id": "agent:local", "task_id": "task-abc", "ttl_seconds": "60"},
+        )
+        listed = _fetch_json(f"{base_url}/identity/list")
+        status = _fetch_json(f"{base_url}/status")
+        identity_id = str(created["identity_id"])
+        revoked = _post_json(f"{base_url}/identity/revoke", {"identity_id": identity_id})
+
+        assert created["principal_id"] == "agent:local"
+        assert isinstance(listed.get("items"), list)
+        assert status["local_identity_registry_enabled"] is True
+        assert int(status["local_identity_total_count"]) >= 1
+        assert revoked["ok"] is True
+    finally:
+        daemon.stop()
+
+
+def test_daemon_background_flush_worker_drains_local_queue(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server, _ = _start_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="token-a",
+                fail_open=False,
+            ),
+            local_identity_config=LocalIdentityBootstrapConfig(
+                enabled=True,
+                registry_file_path=str(tmp_path / "local-identities.json"),
+                default_ttl_seconds=60,
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=0.1),
+            flush_worker=FlushWorkerConfig(enabled=True, interval_s=0.1, max_batch_size=20),
+        )
+        daemon.start()
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:flush"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="flush-state"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            status = _fetch_json(f"{base_url}/status")
+            if int(status["local_flush_queue_flushed_count"]) >= 1:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("Flush worker did not flush local queue within timeout.")
+
+        status = _fetch_json(f"{base_url}/status")
+        assert int(status["flush_sent_count"]) >= 1
+        assert int(status["local_flush_queue_pending_count"]) == 0
+        assert int(status["local_flush_queue_flushed_count"]) >= 1
+        # Immediate control-plane push + queue-flush push should both hit audit endpoint.
+        handler_cls = server.RequestHandlerClass
+        requests = getattr(handler_cls, "requests")
+        assert isinstance(requests, list)
+        audit_posts = [item for item in requests if item[0] == "/v1/audit/events:batch"]
+        assert len(audit_posts) >= 2
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
+def test_daemon_manual_flush_endpoint_drains_queue(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server, _ = _start_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="token-a",
+                fail_open=False,
+            ),
+            local_identity_config=LocalIdentityBootstrapConfig(
+                enabled=True,
+                registry_file_path=str(tmp_path / "local-identities.json"),
+                default_ttl_seconds=60,
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+            flush_worker=FlushWorkerConfig(enabled=False, interval_s=5.0, max_batch_size=20),
+        )
+        daemon.start()
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:manual-flush"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="manual-flush"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        before = _fetch_json(f"{base_url}/ledger/flush-queue")
+        assert len(before.get("items", [])) == 1
+
+        result = _post_json(f"{base_url}/ledger/flush-now", {"max_items": 5})
+        assert result["ok"] is True
+        assert int(result["sent_count"]) >= 1
+
+        after = _fetch_json(f"{base_url}/ledger/flush-queue")
+        assert len(after.get("items", [])) == 0
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
+def test_dead_letter_threshold_quarantines_queue_items(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server, _ = _start_failing_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="token-a",
+                fail_open=True,
+            ),
+            local_identity_config=LocalIdentityBootstrapConfig(
+                enabled=True,
+                registry_file_path=str(tmp_path / "local-identities.json"),
+                default_ttl_seconds=60,
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+            flush_worker=FlushWorkerConfig(
+                enabled=False,
+                interval_s=5.0,
+                max_batch_size=20,
+                dead_letter_max_attempts=1,
+            ),
+        )
+        daemon.start()
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:dead-letter"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="dead-letter-state"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        flush_result = _post_json(f"{base_url}/ledger/flush-now", {"max_items": 10})
+        assert int(flush_result["failed_count"]) >= 1
+        assert int(flush_result["quarantined_count"]) >= 1
+
+        queue_default = _fetch_json(f"{base_url}/ledger/flush-queue")
+        assert len(queue_default.get("items", [])) == 0
+        queue_with_quarantine = _fetch_json(
+            f"{base_url}/ledger/flush-queue?include_quarantined=true"
+        )
+        items = queue_with_quarantine.get("items", [])
+        assert isinstance(items, list)
+        assert len(items) >= 1
+        first_item = items[0]
+        assert isinstance(first_item, dict)
+        assert first_item.get("quarantined") is True
+        queue_item_id = str(first_item["queue_item_id"])
+
+        dead_letter = _fetch_json(f"{base_url}/ledger/dead-letter")
+        dead_letter_items = dead_letter.get("items", [])
+        assert isinstance(dead_letter_items, list)
+        assert len(dead_letter_items) >= 1
+        assert all(
+            bool(item.get("quarantined", False))
+            for item in dead_letter_items
+            if isinstance(item, dict)
+        )
+        status_before_requeue = _fetch_json(f"{base_url}/status")
+        assert int(status_before_requeue["flush_quarantined_count"]) >= 1
+        assert int(status_before_requeue["local_flush_queue_quarantined_count"]) >= 1
+
+        requeued = _post_json(f"{base_url}/ledger/requeue", {"queue_item_id": queue_item_id})
+        assert requeued["ok"] is True
+
+        dead_letter_after = _fetch_json(f"{base_url}/ledger/dead-letter")
+        dead_letter_after_items = dead_letter_after.get("items", [])
+        assert isinstance(dead_letter_after_items, list)
+        assert len(dead_letter_after_items) == 0
+        pending_after = _fetch_json(f"{base_url}/ledger/flush-queue")
+        pending_items_after = pending_after.get("items", [])
+        assert isinstance(pending_items_after, list)
+        assert len(pending_items_after) >= 1
+
+        status = _fetch_json(f"{base_url}/status")
+        assert int(status["flush_quarantined_count"]) >= 1
+        assert int(status["local_flush_queue_quarantined_count"]) == 0
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()

@@ -9,4 +9,5 @@ Core pieces:
 - `LocalMandateSigner` for signed short-lived mandates,
 - `InMemoryProofLedger` and optional `OpenTelemetryTraceEmitter`,
 - typed integration adapters (including `sdk-python` mapping helpers),
-- control-plane client primitives for shipping proof and usage batches to hosted APIs.
+- control-plane client primitives for shipping proof and usage batches to hosted APIs,
+- local identity registry primitives (ephemeral task identities + local flush queue).

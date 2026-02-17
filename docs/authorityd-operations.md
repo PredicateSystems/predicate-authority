@@ -69,6 +69,69 @@ authority decision pushes:
 - audit events -> `/v1/audit/events:batch`
 - usage credits -> `/v1/metering/usage:batch`
 
+## 3b) Optional local identity registry (ephemeral task identities)
+
+Enable local identity support:
+
+```bash
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --identity-mode local-idp \
+  --local-identity-enabled \
+  --local-identity-registry-file ./.predicate-authorityd/local-identities.json \
+  --local-identity-default-ttl-s 900 \
+  --flush-worker-enabled \
+  --flush-worker-interval-s 2.0 \
+  --flush-worker-max-batch-size 50 \
+  --flush-worker-dead-letter-max-attempts 5
+```
+
+Issue an ephemeral identity:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/identity/task \
+  -H "Content-Type: application/json" \
+  -d '{"principal_id":"agent:backend","task_id":"refactor-pr-102","ttl_seconds":120}'
+```
+
+Inspect pending local ledger flush queue:
+
+```bash
+curl -s http://127.0.0.1:8787/ledger/flush-queue | jq
+```
+
+List quarantined dead-letter items only:
+
+```bash
+curl -s http://127.0.0.1:8787/ledger/dead-letter | jq
+```
+
+Manually trigger an immediate flush cycle:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/ledger/flush-now \
+  -H "Content-Type: application/json" \
+  -d '{"max_items":50}' | jq
+```
+
+Requeue a quarantined item for retry:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/ledger/requeue \
+  -H "Content-Type: application/json" \
+  -d '{"queue_item_id":"q_abc123"}' | jq
+```
+
+Flush worker behavior:
+
+- reuses control-plane client retry policy (`--control-plane-max-retries`, `--control-plane-backoff-initial-s`),
+- drains up to `--flush-worker-max-batch-size` queue items per cycle,
+- quarantines entries after `--flush-worker-dead-letter-max-attempts` failed sends,
+- sleeps `--flush-worker-interval-s` between flush cycles.
+
 Expected startup output:
 
 ```text

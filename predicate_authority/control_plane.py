@@ -97,6 +97,9 @@ class ControlPlaneClient:
         payload = {"records": [asdict(record) for record in records]}
         return self._post_json("/v1/metering/usage:batch", payload)
 
+    def send_audit_payload(self, payload: Mapping[str, object]) -> bool:
+        return self._post_json("/v1/audit/events:batch", payload)
+
     def _post_json(self, path: str, payload: Mapping[str, object]) -> bool:
         attempts = self.config.max_retries + 1
         for attempt in range(attempts):

@@ -171,6 +171,46 @@ predicate-authorityd \
   --local-idp-audience "api://predicate-authority"
 ```
 
+### Local identity registry (ephemeral + TTL + flush queue)
+
+Enable sidecar-managed local task identities and local ledger queue:
+
+```bash
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --identity-mode local-idp \
+  --local-identity-enabled \
+  --local-identity-registry-file ./.predicate-authorityd/local-identities.json \
+  --local-identity-default-ttl-s 900 \
+  --flush-worker-enabled \
+  --flush-worker-interval-s 2.0 \
+  --flush-worker-max-batch-size 50 \
+  --flush-worker-dead-letter-max-attempts 5
+```
+
+Runtime endpoints:
+
+- `POST /identity/task` (issue ephemeral task identity)
+- `GET /identity/list` (list identities)
+- `POST /identity/revoke` (revoke identity)
+- `GET /ledger/flush-queue` (inspect pending local ledger queue)
+- `GET /ledger/dead-letter` (list quarantined queue items only)
+- `POST /ledger/flush-ack` (mark queue item as flushed)
+- `POST /ledger/flush-now` (manually trigger immediate queue flush)
+- `POST /ledger/requeue` (requeue quarantined item for retry)
+
+Background flush worker status fields:
+
+- `flush_cycle_count`
+- `flush_sent_count`
+- `flush_failed_count`
+- `flush_quarantined_count`
+- `last_flush_epoch_s`
+- `last_flush_error`
+
 ### How to run with control-plane shipping (out-of-the-box)
 
 ```bash
