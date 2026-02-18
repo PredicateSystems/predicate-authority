@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+# pylint: disable=import-error
 from predicate_authority import (
     ActionGuard,
     AuthorityMode,
@@ -41,8 +42,6 @@ from predicate_contracts import (
     StateEvidence,
     VerificationEvidence,
 )
-
-# pylint: disable=import-error
 
 
 def _build_sidecar(tmp_path: Path, policy_file: Path) -> PredicateAuthoritySidecar:
@@ -191,6 +190,20 @@ def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> N
     daemon.start()
     try:
         base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:test"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="state-1"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+        assert decision.mandate is not None
+
         reloaded = _post_json(f"{base_url}/policy/reload")
         revoke_principal = _post_json(
             f"{base_url}/revoke/principal", {"principal_id": "agent:test-revoked"}
@@ -199,13 +212,19 @@ def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> N
             f"{base_url}/revoke/intent",
             {"intent_hash": "abc123-intent-hash"},
         )
+        revoke_mandate = _post_json(
+            f"{base_url}/revoke/mandate",
+            {"mandate_id": decision.mandate.claims.mandate_id},
+        )
         status = _fetch_json(f"{base_url}/status")
 
         assert "reloaded" in reloaded
         assert revoke_principal["ok"] is True
         assert revoke_intent["ok"] is True
+        assert revoke_mandate["ok"] is True
         assert int(status["revoked_principal_count"]) >= 1
         assert int(status["revoked_intent_count"]) >= 1
+        assert int(status["revoked_mandate_count"]) >= 1
     finally:
         daemon.stop()
 
@@ -227,7 +246,8 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"{}")
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+        _ = fmt
         return
 
 
@@ -259,7 +279,8 @@ def _start_failing_control_plane_server() -> tuple[ThreadingHTTPServer, threadin
             self.end_headers()
             self.wfile.write(b'{"error":"temporary_failure"}')
 
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+            _ = fmt
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), FailingHandler)

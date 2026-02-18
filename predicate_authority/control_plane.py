@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from predicate_contracts import ProofEvent, TraceEmitter
+from predicate_contracts import ProofEvent
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,7 @@ class ControlPlaneClient:
 
 
 @dataclass
-class ControlPlaneTraceEmitter(TraceEmitter):
+class ControlPlaneTraceEmitter:
     client: ControlPlaneClient
     trace_id: str | None = None
     emit_usage_credits: bool = True
@@ -183,7 +183,8 @@ class ControlPlaneTraceEmitter(TraceEmitter):
         except Exception as exc:
             self.audit_push_failure_count += 1
             self.last_push_error = str(exc)
-            raise
+            if not self.client.config.fail_open:
+                raise
 
     def _send_usage_record(self, usage: UsageCreditRecord) -> None:
         try:
@@ -197,4 +198,5 @@ class ControlPlaneTraceEmitter(TraceEmitter):
         except Exception as exc:
             self.usage_push_failure_count += 1
             self.last_push_error = str(exc)
-            raise
+            if not self.client.config.fail_open:
+                raise

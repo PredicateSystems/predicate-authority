@@ -20,6 +20,7 @@ class AuthorizationReason(str, Enum):
     NO_MATCHING_POLICY = "no_matching_policy"
     EXPLICIT_DENY = "explicit_deny"
     MISSING_REQUIRED_VERIFICATION = "missing_required_verification"
+    MAX_DELEGATION_DEPTH_EXCEEDED = "max_delegation_depth_exceeded"
     INVALID_MANDATE = "invalid_mandate"
 
 
@@ -80,6 +81,7 @@ class PolicyRule:
     actions: tuple[str, ...]
     resources: tuple[str, ...]
     required_labels: tuple[str, ...] = field(default_factory=tuple)
+    max_delegation_depth: int | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,9 @@ class MandateClaims:
     state_hash: str
     issued_at_epoch_s: int
     expires_at_epoch_s: int
+    delegated_by: str | None = None
+    delegation_depth: int = 0
+    delegation_chain_hash: str | None = None
 
 
 @dataclass(frozen=True)

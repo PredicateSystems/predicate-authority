@@ -63,6 +63,24 @@ PYTHONPATH=. predicate-authorityd \
   --control-plane-fail-open
 ```
 
+### Signing key safety note (required until mandate `v2` claims)
+
+Until mandate `v2` introduces explicit `iss`/`aud` claims and asymmetric signing defaults,
+each deployment instance must use a unique signing key to reduce cross-instance replay risk.
+
+Recommended startup pattern:
+
+```bash
+export PREDICATE_AUTHORITY_SIGNING_KEY="<unique-random-per-instance>"
+
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --mandate-signing-key-env PREDICATE_AUTHORITY_SIGNING_KEY
+```
+
 When enabled, daemon bootstrap auto-attaches `ControlPlaneTraceEmitter` so each
 authority decision pushes:
 

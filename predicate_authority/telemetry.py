@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 from typing import Protocol, cast
 
-from predicate_contracts import ProofEvent, TraceEmitter
+from predicate_contracts import ProofEvent
 
 
 class SpanLike(Protocol):
@@ -14,7 +14,7 @@ class TracerLike(Protocol):
     def start_as_current_span(self, name: str) -> AbstractContextManager[SpanLike]: ...
 
 
-class OpenTelemetryTraceEmitter(TraceEmitter):
+class OpenTelemetryTraceEmitter:
     """TraceEmitter backed by OpenTelemetry spans/events."""
 
     def __init__(self, tracer: TracerLike | None = None) -> None:

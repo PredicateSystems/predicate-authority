@@ -1,0 +1,9 @@
+rules:
+  - name: allow-orders-create
+    effect: allow
+    principals:
+      - agent:checkout
+    actions:
+      - http.post
+    resources:
+      - https://api.vendor.com/orders

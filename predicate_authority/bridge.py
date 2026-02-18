@@ -112,7 +112,10 @@ class OIDCIdentityBridge:
 
 
 class EntraIdentityBridge(OIDCIdentityBridge):
-    """Microsoft Entra adapter built on generic OIDC behavior."""
+    """Microsoft Entra adapter built on generic OIDC behavior.
+
+    Phase 2 keeps this as a deterministic local stand-in for real IdP token exchange.
+    """
 
     def __init__(self, config: EntraBridgeConfig) -> None:
         oidc_config = OIDCBridgeConfig(

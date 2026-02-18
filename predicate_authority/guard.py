@@ -36,8 +36,18 @@ class ActionGuard:
         self._mandate_signer = mandate_signer
         self._proof_ledger = proof_ledger
 
-    def authorize(self, request: ActionRequest) -> AuthorizationDecision:
-        evaluation = self._policy_engine.evaluate(request)
+    def authorize(
+        self,
+        request: ActionRequest,
+        parent_mandate: SignedMandate | None = None,
+    ) -> AuthorizationDecision:
+        requested_delegation_depth = (
+            parent_mandate.claims.delegation_depth + 1 if parent_mandate is not None else 0
+        )
+        evaluation = self._policy_engine.evaluate(
+            request,
+            delegation_depth=requested_delegation_depth,
+        )
         if not evaluation.allowed:
             decision = AuthorizationDecision(
                 allowed=False,
@@ -48,7 +58,7 @@ class ActionGuard:
             self._proof_ledger.record(decision, request)
             return decision
 
-        mandate = self._mandate_signer.issue(request)
+        mandate = self._mandate_signer.issue(request, parent_mandate=parent_mandate)
         decision = AuthorizationDecision(
             allowed=True,
             reason=AuthorizationReason.ALLOWED,
@@ -59,9 +69,12 @@ class ActionGuard:
         return decision
 
     def enforce(
-        self, action_callable: Callable[[], T], request: ActionRequest
+        self,
+        action_callable: Callable[[], T],
+        request: ActionRequest,
+        parent_mandate: SignedMandate | None = None,
     ) -> ActionExecutionResult[T]:
-        decision = self.authorize(request)
+        decision = self.authorize(request, parent_mandate=parent_mandate)
         if not decision.allowed or decision.mandate is None:
             raise AuthorizationDeniedError(decision)
         value = action_callable()

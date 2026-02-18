@@ -9,6 +9,7 @@ from predicate_authority.bridge import (
     OIDCIdentityBridge,
     TokenExchangeResult,
 )
+from predicate_authority.client import AuthorityClient, LocalAuthorizationContext
 from predicate_authority.control_plane import (
     AuditEventEnvelope,
     ControlPlaneClient,
@@ -46,6 +47,7 @@ __all__ = [
     "ActionExecutionResult",
     "ActionGuard",
     "AuthorityMode",
+    "AuthorityClient",
     "AuthorizationDeniedError",
     "AuditEventEnvelope",
     "ControlPlaneClient",
@@ -61,6 +63,7 @@ __all__ = [
     "LocalIdPBridge",
     "LocalIdPBridgeConfig",
     "LocalCredentialStore",
+    "LocalAuthorizationContext",
     "LocalIdentityRegistry",
     "LocalIdentityRegistryStats",
     "LocalLedgerQueueEmitter",
