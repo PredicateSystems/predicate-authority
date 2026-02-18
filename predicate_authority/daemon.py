@@ -594,9 +594,13 @@ def _build_default_sidecar(
     identity_bridge: ExchangeTokenBridge | None = None,
 ) -> PredicateAuthoritySidecar:
     policy_rules: tuple[PolicyRule, ...] = ()
+    global_max_delegation_depth: int | None = None
     if policy_file is not None and Path(policy_file).exists():
-        policy_rules = PolicyFileSource(policy_file).load_rules()
-    policy_engine = PolicyEngine(rules=policy_rules)
+        policy_rules, global_max_delegation_depth = PolicyFileSource(policy_file).load_policy()
+    policy_engine = PolicyEngine(
+        rules=policy_rules,
+        global_max_delegation_depth=global_max_delegation_depth,
+    )
 
     trace_emitters: list[TraceEmitter] = []
     if (

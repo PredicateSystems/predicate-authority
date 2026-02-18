@@ -1,0 +1,19 @@
+rules:
+  - name: allow-delegate-task
+    effect: allow
+    principals:
+      - agent:root
+    actions:
+      - task.delegate
+    resources:
+      - worker:queue/*
+    max_delegation_depth: 1
+  - name: allow-worker-execute
+    effect: allow
+    principals:
+      - agent:worker
+    actions:
+      - job.execute
+    resources:
+      - queue://jobs/*
+    max_delegation_depth: 1

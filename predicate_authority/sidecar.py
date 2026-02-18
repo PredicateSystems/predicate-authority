@@ -158,6 +158,7 @@ class PredicateAuthoritySidecar:
         result = self._policy_source.reload_if_changed()
         if result.changed:
             self._policy_engine.replace_rules(result.rules)
+            self._policy_engine.set_global_max_delegation_depth(result.global_max_delegation_depth)
             return True
         return False
 
