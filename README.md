@@ -142,6 +142,18 @@ python examples/delegation/entra_obo_compat_demo.py \
   --scope "$ENTRA_SCOPE"
 ```
 
+### OIDC quick command (compatibility check)
+
+```bash
+set -a && source .env && set +a
+python examples/delegation/oidc_compat_demo.py \
+  --issuer "$OIDC_ISSUER" \
+  --client-id "$OIDC_CLIENT_ID" \
+  --client-secret "$OIDC_CLIENT_SECRET" \
+  --audience "$OIDC_AUDIENCE" \
+  --scope "${OIDC_SCOPE:-authority:check}"
+```
+
 ### Local IdP quick command
 
 ```bash

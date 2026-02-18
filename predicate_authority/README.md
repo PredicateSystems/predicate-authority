@@ -72,6 +72,30 @@ python examples/delegation/entra_obo_compat_demo.py \
   --scope "${ENTRA_SCOPE:-api://predicate-authority/.default}"
 ```
 
+## OIDC compatibility demo (capability-gated token exchange)
+
+```bash
+python examples/delegation/oidc_compat_demo.py \
+  --issuer "$OIDC_ISSUER" \
+  --client-id "$OIDC_CLIENT_ID" \
+  --client-secret "$OIDC_CLIENT_SECRET" \
+  --audience "$OIDC_AUDIENCE" \
+  --scope "${OIDC_SCOPE:-authority:check}"
+```
+
+If your provider supports token exchange and you have a subject token:
+
+```bash
+python examples/delegation/oidc_compat_demo.py \
+  --issuer "$OIDC_ISSUER" \
+  --client-id "$OIDC_CLIENT_ID" \
+  --client-secret "$OIDC_CLIENT_SECRET" \
+  --audience "$OIDC_AUDIENCE" \
+  --scope "${OIDC_SCOPE:-authority:check}" \
+  --subject-token "$OIDC_SUBJECT_TOKEN" \
+  --supports-token-exchange
+```
+
 ## Local IdP quick example
 
 ```python

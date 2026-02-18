@@ -39,6 +39,12 @@ from predicate_authority.local_identity import (
     TaskIdentityRecord,
 )
 from predicate_authority.mandate import LocalMandateSigner
+from predicate_authority.oidc_compat import (
+    OidcCompatibilityConfig,
+    OidcCompatibilityError,
+    OidcProviderCapabilities,
+    run_oidc_token_exchange_compatibility_check,
+)
 from predicate_authority.okta_compat import (
     OktaCompatibilityConfig,
     OktaCompatibilityError,
@@ -98,6 +104,9 @@ __all__ = [
     "OktaCompatibilityConfig",
     "OktaCompatibilityError",
     "OktaTenantCapabilities",
+    "OidcCompatibilityConfig",
+    "OidcCompatibilityError",
+    "OidcProviderCapabilities",
     "PolicyEngine",
     "PolicyFileSource",
     "PolicyMatchResult",
@@ -114,6 +123,7 @@ __all__ = [
     "TokenValidationError",
     "UsageCreditRecord",
     "parse_bool",
-    "run_okta_obo_compatibility_check",
     "run_entra_obo_compatibility_check",
+    "run_okta_obo_compatibility_check",
+    "run_oidc_token_exchange_compatibility_check",
 ]

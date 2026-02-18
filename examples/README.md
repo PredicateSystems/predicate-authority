@@ -48,3 +48,9 @@ For Okta OBO/token-exchange compatibility setup and troubleshooting, see:
 For Entra OBO compatibility setup and troubleshooting, see:
 
 - `examples/README_Entra.md`
+
+## OIDC compatibility example notes
+
+For generic OIDC token-exchange compatibility setup and fallback behavior, see:
+
+- `examples/README_OIDC.md`
