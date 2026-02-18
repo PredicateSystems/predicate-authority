@@ -329,6 +329,59 @@ Expected delegation path output:
 
 ---
 
+## Generic OIDC token exchange compatibility (capability-gated)
+
+Use this when integrating with a non-Okta, non-Entra OIDC provider and validating token-exchange readiness.
+
+### 1) Set environment variables
+
+```bash
+export OIDC_ISSUER="https://<oidc-provider>/oauth2/default"
+export OIDC_CLIENT_ID="<oidc-client-id>"
+export OIDC_CLIENT_SECRET="<oidc-client-secret>"
+export OIDC_AUDIENCE="api://predicate-authority"
+export OIDC_SCOPE="authority:check"
+```
+
+### 2) Run compatibility test
+
+```bash
+# token exchange not supported or intentionally disabled:
+export OIDC_COMPAT_CHECK_ENABLED=1
+export OIDC_SUPPORTS_TOKEN_EXCHANGE=false
+python -m pytest tests/test_oidc_compatibility.py -k "live_check_when_enabled"
+
+# token exchange supported:
+export OIDC_COMPAT_CHECK_ENABLED=1
+export OIDC_SUPPORTS_TOKEN_EXCHANGE=true
+export OIDC_SUBJECT_TOKEN="<subject-access-token>"
+python -m pytest tests/test_oidc_compatibility.py -k "live_check_when_enabled"
+```
+
+### 3) Run demo script in `examples/`
+
+```bash
+python examples/delegation/oidc_compat_demo.py \
+  --issuer "$OIDC_ISSUER" \
+  --client-id "$OIDC_CLIENT_ID" \
+  --client-secret "$OIDC_CLIENT_SECRET" \
+  --audience "$OIDC_AUDIENCE" \
+  --scope "${OIDC_SCOPE:-authority:check}"
+```
+
+If token exchange is supported and subject token is available, add:
+
+```bash
+--subject-token "$OIDC_SUBJECT_TOKEN" --supports-token-exchange
+```
+
+Expected delegation path output:
+
+- `idp_token_exchange` (if exchange succeeds), or
+- `authority_mandate_delegation` (fallback).
+
+---
+
 ## Local identity registry + flush queue
 
 Enable ephemeral task identity registry and local ledger queue:

@@ -267,6 +267,50 @@ python examples/delegation/entra_obo_compat_demo.py \
   --supports-obo
 ```
 
+### Generic OIDC token exchange compatibility (capability-gated)
+
+```bash
+export OIDC_COMPAT_CHECK_ENABLED=1
+export OIDC_ISSUER="https://<oidc-provider>/oauth2/default"
+export OIDC_CLIENT_ID="<oidc-client-id>"
+export OIDC_CLIENT_SECRET="<oidc-client-secret>"
+export OIDC_AUDIENCE="api://predicate-authority"
+export OIDC_SCOPE="authority:check"
+
+# Provider does NOT support token exchange:
+export OIDC_SUPPORTS_TOKEN_EXCHANGE=false
+python3 -m pytest tests/test_oidc_compatibility.py -k "live_check_when_enabled"
+
+# Provider supports token exchange:
+export OIDC_SUPPORTS_TOKEN_EXCHANGE=true
+export OIDC_SUBJECT_TOKEN="<subject-access-token>"
+python3 -m pytest tests/test_oidc_compatibility.py -k "live_check_when_enabled"
+```
+
+Run demo script:
+
+```bash
+python examples/delegation/oidc_compat_demo.py \
+  --issuer "$OIDC_ISSUER" \
+  --client-id "$OIDC_CLIENT_ID" \
+  --client-secret "$OIDC_CLIENT_SECRET" \
+  --audience "$OIDC_AUDIENCE" \
+  --scope "${OIDC_SCOPE:-authority:check}"
+```
+
+If token exchange is supported and subject token is available:
+
+```bash
+python examples/delegation/oidc_compat_demo.py \
+  --issuer "$OIDC_ISSUER" \
+  --client-id "$OIDC_CLIENT_ID" \
+  --client-secret "$OIDC_CLIENT_SECRET" \
+  --audience "$OIDC_AUDIENCE" \
+  --scope "${OIDC_SCOPE:-authority:check}" \
+  --subject-token "$OIDC_SUBJECT_TOKEN" \
+  --supports-token-exchange
+```
+
 ### Secret storage policy (Okta credentials)
 
 - never commit Okta client secrets/API tokens/private keys to repo files,
