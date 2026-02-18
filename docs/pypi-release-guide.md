@@ -49,6 +49,28 @@ python -m build predicate_authority
    - `publish-predicate-contracts`
    - `publish-predicate-authority` (runs only after contracts publish succeeds)
 
+## 3b) Publish via git tag (recommended for traceability)
+
+This repository supports tag-triggered publish with a single synchronized tag:
+
+- tag format: `vX.Y.Z`
+- both packages must use the same version `X.Y.Z`
+
+When a tag like `v0.2.0` is pushed:
+
+- workflow `phase1-ci-and-release` triggers on the tag,
+- release order remains enforced,
+- `scripts/validate_release_tag.py` verifies:
+  - `predicate_contracts/pyproject.toml` version == `predicate_authority/pyproject.toml` version,
+  - tag version matches both package versions.
+
+Example:
+
+```bash
+make tag-release VERSION=0.1.0
+git push origin v0.1.0
+```
+
 ## 4) Verify published artifacts
 
 ```bash
@@ -60,23 +82,14 @@ print("ok", predicate_contracts.__name__, predicate_authority.__name__)
 PY
 ```
 
-## 5) Optional: create git tags per package release
+## 5) Optional: manual tags (legacy style)
 
-Tags are not required for publishing in this repo, but they are recommended for traceability.
-
-Suggested tag format:
+If you need package-specific traceability tags for historical reasons, you can still add:
 
 - `predicate-contracts-vX.Y.Z`
 - `predicate-authority-vX.Y.Z`
 
-Example commands (after publish succeeds):
-
-```bash
-git tag -a predicate-contracts-v0.1.0 -m "predicate-contracts v0.1.0"
-git tag -a predicate-authority-v0.1.0 -m "predicate-authority v0.1.0"
-git push origin predicate-contracts-v0.1.0
-git push origin predicate-authority-v0.1.0
-```
+These tags are informational only; automated publish is wired to `vX.Y.Z`.
 
 ## 6) Manual fallback publish (if needed)
 

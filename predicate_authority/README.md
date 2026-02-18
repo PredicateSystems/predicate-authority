@@ -1,6 +1,10 @@
 # predicate-authority
 
-`predicate-authority` provides pre-execution authorization for AI agent actions.
+`predicate-authority` is a deterministic pre-execution authority layer for AI agents.
+It binds identity, policy, and runtime evidence so risky actions are authorized
+before execution and denied fail-closed when checks do not pass.
+
+Docs: https://www.PredicateSystems.ai/docs
 
 Core pieces:
 

@@ -7,7 +7,11 @@ from predicate_authority.bridge import (
     LocalIdPBridgeConfig,
     OIDCBridgeConfig,
     OIDCIdentityBridge,
+    OktaBridgeConfig,
+    OktaIdentityBridge,
+    OktaTokenClaims,
     TokenExchangeResult,
+    TokenValidationError,
 )
 from predicate_authority.client import AuthorityClient, LocalAuthorizationContext
 from predicate_authority.control_plane import (
@@ -29,6 +33,13 @@ from predicate_authority.local_identity import (
     TaskIdentityRecord,
 )
 from predicate_authority.mandate import LocalMandateSigner
+from predicate_authority.okta_compat import (
+    OktaCompatibilityConfig,
+    OktaCompatibilityError,
+    OktaTenantCapabilities,
+    parse_bool,
+    run_okta_obo_compatibility_check,
+)
 from predicate_authority.policy import PolicyEngine, PolicyMatchResult
 from predicate_authority.policy_source import PolicyFileSource, PolicyReloadResult
 from predicate_authority.proof import InMemoryProofLedger
@@ -71,7 +82,13 @@ __all__ = [
     "LocalRevocationCache",
     "OIDCBridgeConfig",
     "OIDCIdentityBridge",
+    "OktaBridgeConfig",
+    "OktaIdentityBridge",
+    "OktaTokenClaims",
     "OpenTelemetryTraceEmitter",
+    "OktaCompatibilityConfig",
+    "OktaCompatibilityError",
+    "OktaTenantCapabilities",
     "PolicyEngine",
     "PolicyFileSource",
     "PolicyMatchResult",
@@ -85,5 +102,8 @@ __all__ = [
     "CompositeTraceEmitter",
     "LedgerQueueItem",
     "TaskIdentityRecord",
+    "TokenValidationError",
     "UsageCreditRecord",
+    "parse_bool",
+    "run_okta_obo_compatibility_check",
 ]

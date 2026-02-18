@@ -219,6 +219,65 @@ predicate-authorityd \
 
 ---
 
+## Okta delegation compatibility check (capability-gated)
+
+Use this when you want to verify whether your Okta tenant can do IdP token
+exchange/OBO for delegation, or if you should use authority mandate delegation
+as the fallback path.
+
+### 1) Set environment variables
+
+```bash
+cp .env.example .env
+
+export OKTA_ISSUER="https://<org>.okta.com/oauth2/default"
+export OKTA_CLIENT_ID="<okta-client-id>"
+export OKTA_CLIENT_SECRET="<okta-client-secret>"
+export OKTA_AUDIENCE="api://predicate-authority"
+export OKTA_SCOPE="authority:check"
+```
+
+### 2) Run compatibility test (live check is opt-in)
+
+```bash
+# Tenant supports token exchange/OBO
+export OKTA_OBO_COMPAT_CHECK_ENABLED=1
+export OKTA_SUPPORTS_TOKEN_EXCHANGE=true
+python -m pytest tests/test_okta_obo_compatibility.py -k "live_check_when_enabled"
+
+# Tenant does NOT support token exchange/OBO
+export OKTA_OBO_COMPAT_CHECK_ENABLED=1
+export OKTA_SUPPORTS_TOKEN_EXCHANGE=false
+python -m pytest tests/test_okta_obo_compatibility.py -k "live_check_when_enabled"
+```
+
+Expected behavior:
+
+- `client_credentials` path succeeds in both modes.
+- if `OKTA_SUPPORTS_TOKEN_EXCHANGE=true`, token exchange should succeed.
+- if `OKTA_SUPPORTS_TOKEN_EXCHANGE=false`, test is explicitly gated and does not
+  fail as a false negative.
+
+### 3) Run demo script in `examples/`
+
+```bash
+python examples/delegation/okta_obo_compat_demo.py \
+  --issuer "$OKTA_ISSUER" \
+  --client-id "$OKTA_CLIENT_ID" \
+  --client-secret "$OKTA_CLIENT_SECRET" \
+  --audience "$OKTA_AUDIENCE" \
+  --scope "${OKTA_SCOPE:-authority:check}" \
+  --supports-token-exchange
+```
+
+If your tenant does not support token exchange, omit
+`--supports-token-exchange`. The script reports which delegation path to use:
+
+- `idp_token_exchange` (when supported), or
+- `authority_mandate_delegation` (fallback).
+
+---
+
 ## Local identity registry + flush queue
 
 Enable ephemeral task identity registry and local ledger queue:

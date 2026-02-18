@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import pytest
+
 # pylint: disable=import-error
 from predicate_authority import (
     ActionGuard,
@@ -32,6 +34,7 @@ from predicate_authority.daemon import (
     LocalIdentityBootstrapConfig,
     _build_default_sidecar,
     _build_identity_bridge_from_args,
+    _validate_ttl_alignment,
 )
 from predicate_contracts import (
     ActionRequest,
@@ -181,7 +184,22 @@ def test_daemon_policy_polling_tracks_reload_count(tmp_path: Path) -> None:
 
 def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> None:
     policy_file = tmp_path / "policy.json"
-    policy_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     sidecar = _build_sidecar(tmp_path, policy_file)
     daemon = PredicateAuthorityDaemon(
         sidecar=sidecar,
@@ -256,6 +274,41 @@ def _start_control_plane_server() -> tuple[ThreadingHTTPServer, threading.Thread
         requests = []
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), BoundHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _start_partitionable_control_plane_server() -> tuple[ThreadingHTTPServer, threading.Thread]:
+    class PartitionableHandler(BaseHTTPRequestHandler):
+        requests: list[tuple[str, dict[str, object], dict[str, str]]] = []
+        fail_mode = False
+
+        def do_POST(self) -> None:  # noqa: N802
+            raw_length = self.headers.get("Content-Length", "0")
+            content_length = int(raw_length) if raw_length.isdigit() else 0
+            payload_raw = (
+                self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+            )
+            loaded = json.loads(payload_raw)
+            assert isinstance(loaded, dict)
+            self.requests.append((self.path, loaded, dict(self.headers.items())))
+            if self.fail_mode:
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"partition"}')
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+            _ = fmt
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PartitionableHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
@@ -384,6 +437,151 @@ def test_daemon_identity_mode_local_idp_builder() -> None:
     )
     assert token.provider.value == "local_idp"
     assert len(token.access_token.split(".")) == 3
+
+
+def test_daemon_identity_mode_okta_builder() -> None:
+    args = Namespace(
+        mode="local_only",
+        identity_mode="okta",
+        allow_local_fallback=False,
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer="https://dev-123456.okta.com/oauth2/default",
+        okta_client_id="okta-client-id",
+        okta_audience="api://predicate-authority",
+    )
+    bridge = _build_identity_bridge_from_args(args)
+    token = bridge.exchange_token(
+        PrincipalRef(principal_id="agent:test"),
+        StateEvidence(source="test", state_hash="state-1"),
+    )
+    assert token.provider.value == "okta"
+
+
+def test_daemon_identity_mode_okta_builder_maps_claim_scope_role_config() -> None:
+    args = Namespace(
+        mode="local_only",
+        identity_mode="okta",
+        allow_local_fallback=False,
+        idp_token_ttl_s=300,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer="https://dev-123456.okta.com/oauth2/default",
+        okta_client_id="okta-client-id",
+        okta_audience="api://predicate-authority",
+        okta_required_claims=["sub,tenant_id"],
+        okta_allowed_tenants=["tenant-a"],
+        okta_required_scopes=["authority:check"],
+        okta_required_roles=["authority-operator"],
+        okta_tenant_claim="tenant_id",
+        okta_scope_claim="scope",
+        okta_role_claim="groups",
+    )
+    bridge = _build_identity_bridge_from_args(args)
+    token = (
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2lkIn0."
+        "eyJpc3MiOiJodHRwczovL2Rldi0xMjM0NTYub2t0YS5jb20vb2F1dGgyL2RlZmF1bHQiLCJhdWQiOiJhcGk6Ly9wcmVkaWNhdGUtYXV0aG9yaXR5Iiwic3ViIjoiYWdlbnQ6dGVzdCIsInRlbmFudF9pZCI6InRlbmFudC1hIiwic2NvcGUiOiJhdXRob3JpdHk6Y2hlY2siLCJncm91cHMiOlsiYXV0aG9yaXR5LW9wZXJhdG9yIl0sImV4cCI6MTEwMCwiaWF0IjoxMDAwfQ."
+        "eyJzaWciOiJ0ZXN0In0"
+    )
+    assert hasattr(bridge, "validate_token_claims")
+    bridge.validate_token_claims(token, now_epoch_s=1000)  # type: ignore[attr-defined]
+
+
+def test_validate_ttl_alignment_rejects_idp_shorter_than_mandate() -> None:
+    with pytest.raises(SystemExit):
+        _validate_ttl_alignment(idp_token_ttl_s=120, mandate_ttl_s=300)
+
+
+def test_validate_ttl_alignment_accepts_aligned_values() -> None:
+    _validate_ttl_alignment(idp_token_ttl_s=300, mandate_ttl_s=300)
+
+
+def test_daemon_identity_mode_okta_requires_args() -> None:
+    args = Namespace(
+        mode="local_only",
+        identity_mode="okta",
+        allow_local_fallback=False,
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer=None,
+        okta_client_id="okta-client-id",
+        okta_audience="api://predicate-authority",
+    )
+    with pytest.raises(SystemExit):
+        _build_identity_bridge_from_args(args)
+
+
+def test_daemon_cloud_connected_local_identity_requires_explicit_fallback() -> None:
+    args = Namespace(
+        mode="cloud_connected",
+        identity_mode="local",
+        allow_local_fallback=False,
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer=None,
+        okta_client_id=None,
+        okta_audience=None,
+    )
+    with pytest.raises(SystemExit):
+        _build_identity_bridge_from_args(args)
+
+
+def test_daemon_cloud_connected_local_identity_allows_with_explicit_fallback() -> None:
+    args = Namespace(
+        mode="cloud_connected",
+        identity_mode="local",
+        allow_local_fallback=True,
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer=None,
+        okta_client_id=None,
+        okta_audience=None,
+    )
+    bridge = _build_identity_bridge_from_args(args)
+    token = bridge.exchange_token(
+        PrincipalRef(principal_id="agent:test"),
+        StateEvidence(source="test", state_hash="state-1"),
+    )
+    assert token.provider.value == "local"
 
 
 def test_daemon_local_identity_registry_endpoints(tmp_path: Path) -> None:
@@ -698,3 +896,185 @@ def test_dead_letter_threshold_quarantines_queue_items(tmp_path: Path) -> None:
             daemon.stop()
         server.shutdown()
         server.server_close()
+
+
+def test_daemon_network_partition_fail_closed_raises_and_tracks_failure(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server, _ = _start_partitionable_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="token-a",
+                fail_open=False,
+                max_retries=0,
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon.start()
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:partition"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="partition-state"),
+            verification_evidence=VerificationEvidence(),
+        )
+
+        warmup = sidecar.issue_mandate(request)
+        assert warmup.allowed is True
+
+        handler_cls = server.RequestHandlerClass
+        setattr(handler_cls, "fail_mode", True)
+
+        try:
+            _ = sidecar.issue_mandate(request)
+            raise AssertionError("Expected fail-closed control-plane error during partition.")
+        except RuntimeError as exc:
+            assert "control-plane request failed" in str(exc)
+
+        status = _fetch_json(f"http://127.0.0.1:{daemon.bound_port}/status")
+        assert int(status["control_plane_audit_push_failure_count"]) >= 1
+        assert status["control_plane_last_push_error"] is not None
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
+def test_daemon_restart_recovers_queue_after_partition(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry_file = tmp_path / "local-identities.json"
+    failing_server, _ = _start_failing_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{failing_server.server_port}",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="token-a",
+                fail_open=True,
+                max_retries=0,
+            ),
+            local_identity_config=LocalIdentityBootstrapConfig(
+                enabled=True,
+                registry_file_path=str(registry_file),
+                default_ttl_seconds=60,
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+            flush_worker=FlushWorkerConfig(enabled=False, interval_s=10.0, max_batch_size=20),
+        )
+        daemon.start()
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:restart"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="restart-state"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        pending_before = _fetch_json(f"{base_url}/ledger/flush-queue")
+        assert len(pending_before.get("items", [])) == 1
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        failing_server.shutdown()
+        failing_server.server_close()
+
+    healthy_server, _ = _start_control_plane_server()
+    daemon_after_restart: PredicateAuthorityDaemon | None = None
+    try:
+        restarted_sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{healthy_server.server_port}",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                auth_token="token-a",
+                fail_open=True,
+                max_retries=0,
+            ),
+            local_identity_config=LocalIdentityBootstrapConfig(
+                enabled=True,
+                registry_file_path=str(registry_file),
+                default_ttl_seconds=60,
+            ),
+        )
+        daemon_after_restart = PredicateAuthorityDaemon(
+            sidecar=restarted_sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+            flush_worker=FlushWorkerConfig(enabled=False, interval_s=10.0, max_batch_size=20),
+        )
+        daemon_after_restart.start()
+        base_url = f"http://127.0.0.1:{daemon_after_restart.bound_port}"
+        flush_result = _post_json(f"{base_url}/ledger/flush-now", {"max_items": 10})
+        assert flush_result["ok"] is True
+        assert int(flush_result["sent_count"]) >= 1
+        pending_after = _fetch_json(f"{base_url}/ledger/flush-queue")
+        assert len(pending_after.get("items", [])) == 0
+    finally:
+        if daemon_after_restart is not None:
+            daemon_after_restart.stop()
+        healthy_server.shutdown()
+        healthy_server.server_close()
