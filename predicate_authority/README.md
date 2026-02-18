@@ -71,3 +71,25 @@ python examples/delegation/entra_obo_compat_demo.py \
   --client-secret "$ENTRA_CLIENT_SECRET" \
   --scope "${ENTRA_SCOPE:-api://predicate-authority/.default}"
 ```
+
+## Local IdP quick example
+
+```python
+from predicate_authority import LocalIdPBridge, LocalIdPBridgeConfig
+from predicate_contracts import PrincipalRef, StateEvidence
+
+bridge = LocalIdPBridge(
+    LocalIdPBridgeConfig(
+        issuer="http://localhost/predicate-local-idp",
+        audience="api://predicate-authority",
+        signing_key="replace-with-strong-secret",
+        token_ttl_seconds=300,
+    )
+)
+
+token = bridge.exchange_token(
+    PrincipalRef(principal_id="agent:local", tenant_id="tenant-a"),
+    StateEvidence(source="backend", state_hash="sha256:local-state"),
+)
+print(token.provider.value, token.access_token[:24] + "...")
+```

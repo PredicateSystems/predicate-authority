@@ -142,6 +142,20 @@ python examples/delegation/entra_obo_compat_demo.py \
   --scope "$ENTRA_SCOPE"
 ```
 
+### Local IdP quick command
+
+```bash
+export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
+predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --identity-mode local-idp \
+  --local-idp-issuer "http://localhost/predicate-local-idp" \
+  --local-idp-audience "api://predicate-authority"
+```
+
 ## Operations CLI
 
 `predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
