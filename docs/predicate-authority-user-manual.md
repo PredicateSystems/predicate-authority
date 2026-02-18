@@ -278,6 +278,57 @@ If your tenant does not support token exchange, omit
 
 ---
 
+## Entra OBO compatibility check (capability-gated)
+
+Use this when validating Entra on-behalf-of delegation support before production rollout.
+
+### 1) Set environment variables
+
+```bash
+export ENTRA_TENANT_ID="<entra-tenant-id>"
+export ENTRA_CLIENT_ID="<entra-client-id>"
+export ENTRA_CLIENT_SECRET="<entra-client-secret>"
+export ENTRA_SCOPE="api://predicate-authority/.default"
+```
+
+### 2) Run compatibility test
+
+```bash
+# OBO not supported/configured:
+export ENTRA_OBO_COMPAT_CHECK_ENABLED=1
+export ENTRA_SUPPORTS_OBO=false
+python -m pytest tests/test_entra_obo_compatibility.py -k "live_check_when_enabled"
+
+# OBO supported and user assertion available:
+export ENTRA_OBO_COMPAT_CHECK_ENABLED=1
+export ENTRA_SUPPORTS_OBO=true
+export ENTRA_USER_ASSERTION="<user-assertion-jwt>"
+python -m pytest tests/test_entra_obo_compatibility.py -k "live_check_when_enabled"
+```
+
+### 3) Run demo script in `examples/`
+
+```bash
+python examples/delegation/entra_obo_compat_demo.py \
+  --tenant-id "$ENTRA_TENANT_ID" \
+  --client-id "$ENTRA_CLIENT_ID" \
+  --client-secret "$ENTRA_CLIENT_SECRET" \
+  --scope "$ENTRA_SCOPE"
+```
+
+If OBO is supported and assertion is available, add:
+
+```bash
+--user-assertion "$ENTRA_USER_ASSERTION" --supports-obo
+```
+
+Expected delegation path output:
+
+- `idp_obo_token_exchange` (if OBO succeeds), or
+- `authority_mandate_delegation` (fallback).
+
+---
+
 ## Local identity registry + flush queue
 
 Enable ephemeral task identity registry and local ledger queue:

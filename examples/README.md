@@ -42,3 +42,9 @@ PYTHONPATH=. python examples/authorityd/daemon_endpoint_check.py
 For Okta OBO/token-exchange compatibility setup and troubleshooting, see:
 
 - `examples/README_Okta.md`
+
+## Entra compatibility example notes
+
+For Entra OBO compatibility setup and troubleshooting, see:
+
+- `examples/README_Entra.md`

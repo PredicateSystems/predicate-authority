@@ -131,6 +131,31 @@ See runnable examples in:
 - `examples/mcp_tool_guard_example.py`
 - `examples/outbound_http_guard_example.py`
 
+### Entra quick command (compatibility check)
+
+```bash
+set -a && source .env && set +a
+python examples/delegation/entra_obo_compat_demo.py \
+  --tenant-id "$ENTRA_TENANT_ID" \
+  --client-id "$ENTRA_CLIENT_ID" \
+  --client-secret "$ENTRA_CLIENT_SECRET" \
+  --scope "$ENTRA_SCOPE"
+```
+
+### Local IdP quick command
+
+```bash
+export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
+predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --identity-mode local-idp \
+  --local-idp-issuer "http://localhost/predicate-local-idp" \
+  --local-idp-audience "api://predicate-authority"
+```
+
 ## Operations CLI
 
 `predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
