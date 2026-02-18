@@ -183,7 +183,8 @@ class ControlPlaneTraceEmitter:
         except Exception as exc:
             self.audit_push_failure_count += 1
             self.last_push_error = str(exc)
-            raise
+            if not self.client.config.fail_open:
+                raise
 
     def _send_usage_record(self, usage: UsageCreditRecord) -> None:
         try:
@@ -197,4 +198,5 @@ class ControlPlaneTraceEmitter:
         except Exception as exc:
             self.usage_push_failure_count += 1
             self.last_push_error = str(exc)
-            raise
+            if not self.client.config.fail_open:
+                raise
