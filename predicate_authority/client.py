@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from predicate_authority.guard import ActionGuard
@@ -61,6 +62,27 @@ class AuthorityClient:
                 revocation_cache=LocalRevocationCache(),
             ),
             policy_file=policy_file,
+        )
+
+    @classmethod
+    def from_env(cls) -> LocalAuthorizationContext:
+        policy_file = os.getenv("PREDICATE_AUTHORITY_POLICY_FILE")
+        secret_key = os.getenv("PREDICATE_AUTHORITY_SIGNING_KEY")
+        ttl_seconds_raw = os.getenv("PREDICATE_AUTHORITY_MANDATE_TTL_SECONDS", "300")
+        if policy_file is None or policy_file.strip() == "":
+            raise RuntimeError("PREDICATE_AUTHORITY_POLICY_FILE is required.")
+        if secret_key is None or secret_key.strip() == "":
+            raise RuntimeError("PREDICATE_AUTHORITY_SIGNING_KEY is required.")
+        try:
+            ttl_seconds = int(ttl_seconds_raw)
+        except ValueError as exc:
+            raise RuntimeError(
+                "PREDICATE_AUTHORITY_MANDATE_TTL_SECONDS must be an integer."
+            ) from exc
+        return cls.from_policy_file(
+            policy_file=policy_file,
+            secret_key=secret_key,
+            ttl_seconds=ttl_seconds,
         )
 
     def authorize(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from threading import Lock
 
 from predicate_contracts import ActionRequest, AuthorizationReason, PolicyEffect, PolicyRule
 
@@ -22,15 +23,31 @@ class PolicyEngine:
     ) -> None:
         self._rules = rules
         self._global_max_delegation_depth = global_max_delegation_depth
+        self._lock = Lock()
 
     def replace_rules(self, rules: tuple[PolicyRule, ...]) -> None:
-        self._rules = rules
+        with self._lock:
+            self._rules = rules
 
     def set_global_max_delegation_depth(self, max_depth: int | None) -> None:
-        self._global_max_delegation_depth = max_depth
+        with self._lock:
+            self._global_max_delegation_depth = max_depth
+
+    def replace_policy(
+        self,
+        rules: tuple[PolicyRule, ...],
+        global_max_delegation_depth: int | None,
+    ) -> None:
+        with self._lock:
+            self._rules = rules
+            self._global_max_delegation_depth = global_max_delegation_depth
 
     def evaluate(self, request: ActionRequest, delegation_depth: int = 0) -> PolicyMatchResult:
-        matching_rules = [rule for rule in self._rules if self._matches_rule(rule, request)]
+        with self._lock:
+            rules = self._rules
+            global_max_delegation_depth = self._global_max_delegation_depth
+
+        matching_rules = [rule for rule in rules if self._matches_rule(rule, request)]
         if not matching_rules:
             return PolicyMatchResult(
                 allowed=False,
@@ -50,7 +67,10 @@ class PolicyEngine:
             if rule.effect != PolicyEffect.ALLOW:
                 continue
 
-            effective_max_depth = self._effective_max_delegation_depth(rule)
+            effective_max_depth = self._effective_max_delegation_depth(
+                global_max_delegation_depth,
+                rule.max_delegation_depth,
+            )
             if effective_max_depth is not None and delegation_depth > effective_max_depth:
                 failure = PolicyMatchResult(
                     allowed=False,
@@ -102,9 +122,11 @@ class PolicyEngine:
         )
         return principal_ok and action_ok and resource_ok
 
-    def _effective_max_delegation_depth(self, rule: PolicyRule) -> int | None:
-        global_max = self._global_max_delegation_depth
-        rule_max = rule.max_delegation_depth
+    @staticmethod
+    def _effective_max_delegation_depth(
+        global_max: int | None,
+        rule_max: int | None,
+    ) -> int | None:
         if global_max is None:
             return rule_max
         if rule_max is None:

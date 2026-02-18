@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from predicate_contracts import ProofEvent, TraceEmitter
+from predicate_contracts import ProofEvent
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,7 @@ class ControlPlaneClient:
 
 
 @dataclass
-class ControlPlaneTraceEmitter(TraceEmitter):
+class ControlPlaneTraceEmitter:
     client: ControlPlaneClient
     trace_id: str | None = None
     emit_usage_credits: bool = True

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pytest import MonkeyPatch
+
 # pylint: disable=import-error
 from predicate_authority import AuthorityClient
 from predicate_contracts import (
@@ -92,3 +94,28 @@ def test_authority_client_global_max_depth_from_yaml_is_enforced(tmp_path: Path)
     child = client.authorize(request, parent_mandate=root.mandate)
     assert child.allowed is False
     assert child.reason == AuthorizationReason.MAX_DELEGATION_DEPTH_EXCEEDED
+
+
+def test_authority_client_from_env(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "\n".join(
+            [
+                "rules:",
+                "  - name: allow-orders-create",
+                "    effect: allow",
+                "    principals:",
+                "      - agent:checkout",
+                "    actions:",
+                "      - http.post",
+                "    resources:",
+                "      - https://api.vendor.com/orders",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PREDICATE_AUTHORITY_POLICY_FILE", str(policy))
+    monkeypatch.setenv("PREDICATE_AUTHORITY_SIGNING_KEY", "env-test-secret")
+    monkeypatch.setenv("PREDICATE_AUTHORITY_MANDATE_TTL_SECONDS", "120")
+    context = AuthorityClient.from_env()
+    assert context.policy_file == str(policy)

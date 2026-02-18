@@ -53,6 +53,7 @@ class DaemonConfig:
     host: str = "127.0.0.1"
     port: int = 8787
     policy_poll_interval_s: float = 2.0
+    max_request_body_bytes: int = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,7 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
             "/policy/reload": self._handle_policy_reload,
             "/revoke/principal": self._handle_revoke_principal,
             "/revoke/intent": self._handle_revoke_intent,
+            "/revoke/mandate": self._handle_revoke_mandate,
             "/identity/task": self._handle_identity_task,
             "/identity/revoke": self._handle_identity_revoke,
             "/ledger/flush-ack": self._handle_ledger_flush_ack,
@@ -200,6 +202,15 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
             return
         self.server.daemon_ref.revoke_intent(intent_hash.strip())  # type: ignore[attr-defined]
         self._send_json(200, {"ok": True, "intent_hash": intent_hash.strip()})
+
+    def _handle_revoke_mandate(self) -> None:
+        payload = self._read_json_body()
+        mandate_id = payload.get("mandate_id")
+        if not isinstance(mandate_id, str) or mandate_id.strip() == "":
+            self._send_json(400, {"error": "mandate_id is required"})
+            return
+        self.server.daemon_ref.revoke_mandate(mandate_id.strip())  # type: ignore[attr-defined]
+        self._send_json(200, {"ok": True, "mandate_id": mandate_id.strip()})
 
     def _handle_identity_task(self) -> None:
         payload = self._read_json_body()
@@ -272,6 +283,9 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
         except ValueError:
             return {}
         if content_length <= 0:
+            return {}
+        max_body = self.server.daemon_ref.max_request_body_bytes()  # type: ignore[attr-defined]
+        if content_length > max_body:
             return {}
         payload = self.rfile.read(content_length).decode("utf-8")
         try:
@@ -387,6 +401,12 @@ class PredicateAuthorityDaemon:
 
     def revoke_intent(self, intent_hash: str) -> None:
         self._sidecar.revoke_intent_hash(intent_hash)
+
+    def revoke_mandate(self, mandate_id: str) -> None:
+        self._sidecar.revoke_mandate_id(mandate_id)
+
+    def max_request_body_bytes(self) -> int:
+        return max(0, int(self._config.max_request_body_bytes))
 
     def issue_task_identity(
         self,
@@ -592,6 +612,7 @@ def _build_default_sidecar(
     control_plane_config: ControlPlaneBootstrapConfig | None = None,
     local_identity_config: LocalIdentityBootstrapConfig | None = None,
     identity_bridge: ExchangeTokenBridge | None = None,
+    mandate_signing_key: str | None = None,
 ) -> PredicateAuthoritySidecar:
     policy_rules: tuple[PolicyRule, ...] = ()
     global_max_delegation_depth: int | None = None
@@ -647,7 +668,7 @@ def _build_default_sidecar(
 
     guard = ActionGuard(
         policy_engine=policy_engine,
-        mandate_signer=LocalMandateSigner(secret_key=secrets.token_hex(32)),
+        mandate_signer=LocalMandateSigner(secret_key=mandate_signing_key or secrets.token_hex(32)),
         proof_ledger=proof_ledger,
     )
     return PredicateAuthoritySidecar(
@@ -707,6 +728,22 @@ def _build_identity_bridge_from_args(args: argparse.Namespace) -> ExchangeTokenB
             )
         )
     raise SystemExit(f"Unsupported identity mode: {mode}")
+
+
+def _resolve_mandate_signing_key(
+    signing_key_file: str | None,
+    signing_key_env: str,
+) -> str:
+    if signing_key_file is not None and str(signing_key_file).strip() != "":
+        key_path = Path(signing_key_file)
+        if key_path.exists():
+            loaded = key_path.read_text(encoding="utf-8").strip()
+            if loaded != "":
+                return loaded
+    env_value = os.getenv(signing_key_env)
+    if env_value is not None and env_value.strip() != "":
+        return env_value.strip()
+    return secrets.token_hex(32)
 
 
 def main() -> None:
@@ -816,6 +853,16 @@ def main() -> None:
     )
     parser.set_defaults(control_plane_fail_open=True)
     parser.add_argument("--control-plane-usage-credits-per-decision", type=int, default=1)
+    parser.add_argument(
+        "--mandate-signing-key-env",
+        default="PREDICATE_AUTHORITY_SIGNING_KEY",
+        help="Env var name for mandate signing key.",
+    )
+    parser.add_argument(
+        "--mandate-signing-key-file",
+        default=None,
+        help="Optional file path containing mandate signing key.",
+    )
     args = parser.parse_args()
 
     mode = AuthorityMode(args.mode)
@@ -851,6 +898,10 @@ def main() -> None:
         default_ttl_seconds=max(1, int(args.local_identity_default_ttl_s)),
     )
     identity_bridge = _build_identity_bridge_from_args(args)
+    mandate_signing_key = _resolve_mandate_signing_key(
+        signing_key_file=args.mandate_signing_key_file,
+        signing_key_env=args.mandate_signing_key_env,
+    )
     sidecar = _build_default_sidecar(
         mode=mode,
         policy_file=args.policy_file,
@@ -858,6 +909,7 @@ def main() -> None:
         control_plane_config=control_plane_bootstrap,
         local_identity_config=local_identity_bootstrap,
         identity_bridge=identity_bridge,
+        mandate_signing_key=mandate_signing_key,
     )
     daemon = PredicateAuthorityDaemon(
         sidecar=sidecar,
@@ -865,6 +917,7 @@ def main() -> None:
             host=args.host,
             port=args.port,
             policy_poll_interval_s=args.policy_poll_interval_s,
+            max_request_body_bytes=1_048_576,
         ),
         flush_worker=FlushWorkerConfig(
             enabled=bool(args.flush_worker_enabled),

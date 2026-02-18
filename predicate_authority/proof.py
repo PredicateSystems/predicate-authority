@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from threading import Lock
 
 from predicate_contracts import ActionRequest, AuthorizationDecision, ProofEvent, TraceEmitter
 
@@ -10,6 +11,7 @@ from predicate_contracts import ActionRequest, AuthorizationDecision, ProofEvent
 class InMemoryProofLedger:
     trace_emitter: TraceEmitter | None = None
     events: list[ProofEvent] = field(default_factory=list)
+    _lock: Lock = field(default_factory=Lock)
 
     def record(self, decision: AuthorizationDecision, request: ActionRequest) -> ProofEvent:
         event = ProofEvent(
@@ -22,7 +24,13 @@ class InMemoryProofLedger:
             mandate_id=decision.mandate.claims.mandate_id if decision.mandate else None,
             emitted_at_epoch_s=int(time.time()),
         )
-        self.events.append(event)
-        if self.trace_emitter is not None:
-            self.trace_emitter.emit(event)
+        with self._lock:
+            self.events.append(event)
+            trace_emitter = self.trace_emitter
+        if trace_emitter is not None:
+            trace_emitter.emit(event)
         return event
+
+    def event_count(self) -> int:
+        with self._lock:
+            return len(self.events)

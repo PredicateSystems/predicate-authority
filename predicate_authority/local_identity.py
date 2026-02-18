@@ -259,11 +259,12 @@ class LocalIdentityRegistry:
             return True
 
     def list_dead_letter_queue(self, limit: int | None = None) -> list[LedgerQueueItem]:
-        return self.list_flush_queue(
+        items = self.list_flush_queue(
             include_flushed=True,
             include_quarantined=True,
             limit=limit,
         )
+        return [item for item in items if item.quarantined]
 
     def requeue_item(self, queue_item_id: str, reset_attempts: bool = True) -> bool:
         with self._lock:
@@ -317,7 +318,10 @@ class LocalIdentityRegistry:
         content = self._file_path.read_text(encoding="utf-8").strip()
         if content == "":
             return {"identities": {}, "flush_queue": {}}
-        loaded = json.loads(content)
+        try:
+            loaded = json.loads(content)
+        except json.JSONDecodeError:
+            return {"identities": {}, "flush_queue": {}}
         if isinstance(loaded, dict):
             if "identities" not in loaded:
                 loaded["identities"] = {}
@@ -356,7 +360,9 @@ class LocalIdentityRegistry:
             return None
 
     def _write_all_unlocked(self, payload: dict[str, Any]) -> None:
-        self._file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp_path = self._file_path.with_name(f"{self._file_path.name}.{uuid.uuid4().hex}.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp_path, self._file_path)
         self._chmod_file_safe()
 
     def _ensure_store_path(self) -> None:
@@ -366,10 +372,12 @@ class LocalIdentityRegistry:
         except OSError:
             pass
         if not self._file_path.exists():
-            self._file_path.write_text(
+            tmp_path = self._file_path.with_name(f"{self._file_path.name}.{uuid.uuid4().hex}.tmp")
+            tmp_path.write_text(
                 json.dumps({"identities": {}, "flush_queue": {}}, indent=2),
                 encoding="utf-8",
             )
+            os.replace(tmp_path, self._file_path)
         self._chmod_file_safe()
 
     def _chmod_file_safe(self) -> None:
@@ -380,7 +388,7 @@ class LocalIdentityRegistry:
 
 
 @dataclass
-class LocalLedgerQueueEmitter(TraceEmitter):
+class LocalLedgerQueueEmitter:
     registry: LocalIdentityRegistry
     source: str = "predicate-authorityd"
 
@@ -389,7 +397,7 @@ class LocalLedgerQueueEmitter(TraceEmitter):
 
 
 @dataclass
-class CompositeTraceEmitter(TraceEmitter):
+class CompositeTraceEmitter:
     emitters: tuple[TraceEmitter, ...]
 
     def emit(self, event: ProofEvent) -> None:

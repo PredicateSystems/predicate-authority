@@ -152,13 +152,18 @@ class PredicateAuthoritySidecar:
     def revoke_intent_hash(self, intent_hash: str) -> None:
         self._revocation_cache.revoke_intent_hash(intent_hash)
 
+    def revoke_mandate_id(self, mandate_id: str) -> None:
+        self._revocation_cache.revoke_mandate_id(mandate_id)
+
     def hot_reload_policy(self) -> bool:
         if self._policy_source is None:
             return False
         result = self._policy_source.reload_if_changed()
         if result.changed:
-            self._policy_engine.replace_rules(result.rules)
-            self._policy_engine.set_global_max_delegation_depth(result.global_max_delegation_depth)
+            self._policy_engine.replace_policy(
+                rules=result.rules,
+                global_max_delegation_depth=result.global_max_delegation_depth,
+            )
             return True
         return False
 
@@ -175,10 +180,10 @@ class PredicateAuthoritySidecar:
         return SidecarStatus(
             mode=self._config.mode,
             policy_hot_reload_enabled=self._policy_source is not None,
-            revoked_principal_count=len(self._revocation_cache.revoked_principal_ids),
-            revoked_intent_count=len(self._revocation_cache.revoked_intent_hashes),
-            revoked_mandate_count=len(self._revocation_cache.revoked_mandate_ids),
-            proof_event_count=len(self._proof_ledger.events),
+            revoked_principal_count=self._revocation_cache.revoked_principal_count(),
+            revoked_intent_count=self._revocation_cache.revoked_intent_count(),
+            revoked_mandate_count=self._revocation_cache.revoked_mandate_count(),
+            proof_event_count=self._proof_ledger.event_count(),
             control_plane_emitter_attached=control_plane_attached,
             control_plane_audit_push_success_count=int(
                 control_plane_payload.get("control_plane_audit_push_success_count", 0)
