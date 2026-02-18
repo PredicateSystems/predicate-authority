@@ -1,7 +1,13 @@
-.PHONY: hooks lint test examples verify-release-order build-packages format format-python format-docs lint-docs dev-install
+.PHONY: hooks lint test examples verify-release-order build-packages format format-python format-docs lint-docs dev-install tag-release
 
 dev-install:
 	python -m pip install -e predicate_contracts -e predicate_authority
+
+tag-release:
+	@test -n "$(VERSION)" || (echo "Usage: make tag-release VERSION=X.Y.Z" && exit 1)
+	python scripts/validate_release_tag.py --tag "v$(VERSION)"
+	git tag -a "v$(VERSION)" -m "Release v$(VERSION)"
+	@echo "Created tag v$(VERSION). Push with: git push origin v$(VERSION)"
 
 hooks:
 	pre-commit install

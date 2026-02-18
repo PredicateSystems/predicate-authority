@@ -5,6 +5,7 @@
 [![License](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![PyPI - predicate-authority](https://img.shields.io/pypi/v/predicate-authority.svg)](https://pypi.org/project/predicate-authority/)
 [![PyPI - predicate-contracts](https://img.shields.io/pypi/v/predicate-contracts.svg)](https://pypi.org/project/predicate-contracts/)
+[![Release Tag](https://img.shields.io/badge/release-vX.Y.Z-blue)](docs/pypi-release-guide.md)
 
 `predicate-authority` is a production-grade pre-execution authority layer that binds AI agent identity to deterministic state. It bridges standard IdPs (Entra ID, Okta, OIDC) with runtime verification so every sensitive action is authorized, bounded, and provable.
 
@@ -68,6 +69,9 @@ For local editable development in this monorepo, install both package roots
 make dev-install
 # equivalent: python -m pip install -e predicate_contracts -e predicate_authority
 ```
+
+Release note: publish is supported by pushing a synchronized git tag `vX.Y.Z`
+(see `docs/pypi-release-guide.md`).
 
 For shared contracts directly:
 
