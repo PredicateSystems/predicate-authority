@@ -81,11 +81,97 @@ PYTHONPATH=. predicate-authorityd \
   --mandate-signing-key-env PREDICATE_AUTHORITY_SIGNING_KEY
 ```
 
+## 2b) Okta production hardening checklist + staging matrix
+
+Use this section when validating enterprise IdP readiness for Phase 2.
+
+### Checklist
+
+- [ ] Configure dedicated Okta OIDC app integration per environment (staging/prod split).
+- [ ] Verify configured `issuer` and `audience` are exact matches to the target environment.
+- [ ] Verify required claims/scopes/groups mapping used by authority role/tenant checks.
+- [ ] Enforce strict JWT checks (`iss`, `aud`, `exp`, `nbf`, `iat`, required claims, alg allowlist).
+- [ ] Validate JWKS retrieval and cache behavior for normal operation.
+- [ ] Validate key rotation behavior (`kid` rollover) without service restart.
+- [ ] Validate fail-closed behavior for cold-start JWKS failure and stale key scenarios.
+- [ ] Validate redaction: no token/secret leakage in logs on failures/retries.
+- [x] Validate startup diagnostics for missing/invalid auth configuration.
+- [ ] Validate revocation path behavior under Okta-backed principals.
+
+### Staging test matrix
+
+| Test ID | Scenario | Expected Result |
+| --- | --- | --- |
+| OKTA-01 | Valid token (correct issuer/audience/scope) | Request authorized and audit emitted |
+| OKTA-02 | Wrong issuer | Denied with issuer mismatch reason |
+| OKTA-03 | Wrong audience | Denied with audience mismatch reason |
+| OKTA-04 | Missing required scope | Denied fail-closed before action |
+| OKTA-05 | Expired token | Denied with expiration reason |
+| OKTA-06 | Future `nbf` beyond leeway | Denied with temporal validation reason |
+| OKTA-07 | Unsupported signing algorithm | Denied before trust decision |
+| OKTA-08 | JWKS rotation (`kid` changes) | Validation recovers without restart |
+| OKTA-09 | JWKS outage with warm cache | Existing key path continues until cache boundary |
+| OKTA-10 | JWKS outage with cold cache | Startup/auth fails closed with actionable diagnostics |
+| OKTA-11 | Tenant outside allow-list | Denied with tenant policy reason |
+| OKTA-12 | Principal/intent revocation during run | Subsequent action denied promptly |
+| OKTA-13 | Log redaction check | No raw tokens/secrets in logs |
+
+### Signoff evidence commands (deterministic integration tests)
+
+Run these from `AgentIdentity` repo root and attach output to signoff evidence.
+
+1) Network partition fail-closed behavior:
+
+```bash
+python3 -m pytest tests/test_daemon_phase2.py -k "network_partition_fail_closed_raises_and_tracks_failure"
+```
+
+Checkpoints:
+
+- pass result proves fail-closed error path is enforced when control-plane is partitioned and `fail_open=False`,
+- `/status` payload includes incremented control-plane failure counters.
+
+2) Restart recovery with persisted queue:
+
+```bash
+python3 -m pytest tests/test_daemon_phase2.py -k "restart_recovers_queue_after_partition"
+```
+
+Checkpoints:
+
+- pre-restart flush queue has pending event(s),
+- post-restart `POST /ledger/flush-now` reports `sent_count >= 1`,
+- post-flush queue is empty (`GET /ledger/flush-queue` returns no items).
+
 When enabled, daemon bootstrap auto-attaches `ControlPlaneTraceEmitter` so each
 authority decision pushes:
 
 - audit events -> `/v1/audit/events:batch`
 - usage credits -> `/v1/metering/usage:batch`
+
+### Optional: use Okta identity mode
+
+Provide Okta OIDC values via env vars:
+
+```bash
+export OKTA_ISSUER="https://<org>.okta.com/oauth2/default"
+export OKTA_CLIENT_ID="<okta-client-id>"
+export OKTA_AUDIENCE="api://predicate-authority"
+```
+
+Start daemon in Okta mode:
+
+```bash
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode cloud_connected \
+  --identity-mode okta \
+  --okta-issuer "$OKTA_ISSUER" \
+  --okta-client-id "$OKTA_CLIENT_ID" \
+  --okta-audience "$OKTA_AUDIENCE" \
+  --policy-file examples/authorityd/policy.json
+```
 
 ## 3b) Optional local identity registry (ephemeral task identities)
 

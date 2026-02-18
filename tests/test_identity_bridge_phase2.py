@@ -10,8 +10,12 @@ from predicate_authority import (
     LocalIdPBridgeConfig,
     OIDCBridgeConfig,
     OIDCIdentityBridge,
+    OktaBridgeConfig,
+    OktaIdentityBridge,
 )
 from predicate_contracts import PrincipalRef, StateEvidence
+
+# pylint: disable=import-error
 
 
 def test_oidc_bridge_exchange_and_refresh() -> None:
@@ -77,6 +81,23 @@ def test_local_idp_bridge_issues_jwt_like_token() -> None:
     refreshed = bridge.refresh_token("refresh-123", subject, state)
     refreshed_payload = _decode_jwt_payload(refreshed.access_token.split(".")[1])
     assert refreshed_payload["token_kind"] == "refresh_access"
+
+
+def test_okta_bridge_marks_provider() -> None:
+    bridge = OktaIdentityBridge(
+        OktaBridgeConfig(
+            issuer="https://dev-123456.okta.com/oauth2/default",
+            client_id="okta-client-id",
+            audience="api://predicate-authority",
+            token_ttl_seconds=120,
+        )
+    )
+    subject = PrincipalRef(principal_id="agent:okta")
+    state = StateEvidence(source="backend", state_hash="state-okta")
+
+    result = bridge.exchange_token(subject, state)
+
+    assert result.provider.value == "okta"
 
 
 def _decode_jwt_payload(payload_segment: str) -> dict[str, object]:

@@ -45,6 +45,14 @@ class EntraBridgeConfig:
 
 
 @dataclass(frozen=True)
+class OktaBridgeConfig:
+    issuer: str
+    client_id: str
+    audience: str
+    token_ttl_seconds: int = 300
+
+
+@dataclass(frozen=True)
 class LocalIdPBridgeConfig:
     issuer: str = "http://localhost/predicate-local-idp"
     audience: str = "api://predicate-authority"
@@ -135,6 +143,33 @@ class EntraIdentityBridge(OIDCIdentityBridge):
             expires_at_epoch_s=result.expires_at_epoch_s,
             token_type=result.token_type,
             provider=IdentityProviderType.ENTRA,
+        )
+
+
+class OktaIdentityBridge(OIDCIdentityBridge):
+    """Okta adapter built on generic OIDC behavior.
+
+    Phase 2 keeps this as a deterministic local stand-in for real IdP token exchange.
+    """
+
+    def __init__(self, config: OktaBridgeConfig) -> None:
+        oidc_config = OIDCBridgeConfig(
+            issuer=config.issuer,
+            client_id=config.client_id,
+            audience=config.audience,
+            token_ttl_seconds=config.token_ttl_seconds,
+        )
+        super().__init__(oidc_config)
+
+    def exchange_token(
+        self, subject: PrincipalRef, state_evidence: StateEvidence
+    ) -> TokenExchangeResult:
+        result = super().exchange_token(subject, state_evidence)
+        return TokenExchangeResult(
+            access_token=result.access_token,
+            expires_at_epoch_s=result.expires_at_epoch_s,
+            token_type=result.token_type,
+            provider=IdentityProviderType.OKTA,
         )
 
 

@@ -20,6 +20,8 @@ from predicate_authority.bridge import (
     LocalIdPBridgeConfig,
     OIDCBridgeConfig,
     OIDCIdentityBridge,
+    OktaBridgeConfig,
+    OktaIdentityBridge,
 )
 from predicate_authority.control_plane import (
     ControlPlaneClient,
@@ -727,6 +729,19 @@ def _build_identity_bridge_from_args(args: argparse.Namespace) -> ExchangeTokenB
                 token_ttl_seconds=int(args.idp_token_ttl_s),
             )
         )
+    if mode == "okta":
+        if args.okta_issuer is None or args.okta_client_id is None or args.okta_audience is None:
+            raise SystemExit(
+                "identity-mode=okta requires --okta-issuer, --okta-client-id, and --okta-audience."
+            )
+        return OktaIdentityBridge(
+            OktaBridgeConfig(
+                issuer=str(args.okta_issuer),
+                client_id=str(args.okta_client_id),
+                audience=str(args.okta_audience),
+                token_ttl_seconds=int(args.idp_token_ttl_s),
+            )
+        )
     raise SystemExit(f"Unsupported identity mode: {mode}")
 
 
@@ -773,9 +788,9 @@ def main() -> None:
     parser.add_argument("--local-identity-default-ttl-s", type=int, default=900)
     parser.add_argument(
         "--identity-mode",
-        choices=["local", "local-idp", "oidc", "entra"],
+        choices=["local", "local-idp", "oidc", "entra", "okta"],
         default="local",
-        help="Identity source for token exchange: local, local-idp, oidc, or entra.",
+        help="Identity source for token exchange: local, local-idp, oidc, entra, or okta.",
     )
     parser.add_argument("--idp-token-ttl-s", type=int, default=300)
     parser.add_argument(
@@ -797,6 +812,9 @@ def main() -> None:
     parser.add_argument("--entra-tenant-id", default=os.getenv("ENTRA_TENANT_ID"))
     parser.add_argument("--entra-client-id", default=os.getenv("ENTRA_CLIENT_ID"))
     parser.add_argument("--entra-audience", default=os.getenv("ENTRA_AUDIENCE"))
+    parser.add_argument("--okta-issuer", default=os.getenv("OKTA_ISSUER"))
+    parser.add_argument("--okta-client-id", default=os.getenv("OKTA_CLIENT_ID"))
+    parser.add_argument("--okta-audience", default=os.getenv("OKTA_AUDIENCE"))
     parser.add_argument(
         "--control-plane-enabled",
         action="store_true",

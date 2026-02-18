@@ -7,6 +7,8 @@ from predicate_authority.bridge import (
     LocalIdPBridgeConfig,
     OIDCBridgeConfig,
     OIDCIdentityBridge,
+    OktaBridgeConfig,
+    OktaIdentityBridge,
     TokenExchangeResult,
 )
 from predicate_authority.client import AuthorityClient, LocalAuthorizationContext
@@ -71,6 +73,8 @@ __all__ = [
     "LocalRevocationCache",
     "OIDCBridgeConfig",
     "OIDCIdentityBridge",
+    "OktaBridgeConfig",
+    "OktaIdentityBridge",
     "OpenTelemetryTraceEmitter",
     "PolicyEngine",
     "PolicyFileSource",
