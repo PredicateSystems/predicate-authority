@@ -1,4 +1,7 @@
-.PHONY: hooks lint test examples verify-release-order build-packages format format-python format-docs lint-docs
+.PHONY: hooks lint test examples verify-release-order build-packages format format-python format-docs lint-docs dev-install
+
+dev-install:
+	python -m pip install -e predicate_contracts -e predicate_authority
 
 hooks:
 	pre-commit install

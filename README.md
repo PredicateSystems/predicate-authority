@@ -61,6 +61,14 @@ Implemented in this repository:
 pip install predicate-authority
 ```
 
+For local editable development in this monorepo, install both package roots
+(do not use `pip install -e .` at repo root):
+
+```bash
+make dev-install
+# equivalent: python -m pip install -e predicate_contracts -e predicate_authority
+```
+
 For shared contracts directly:
 
 ```bash

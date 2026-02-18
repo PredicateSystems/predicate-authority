@@ -36,3 +36,9 @@ Check endpoints:
 ```bash
 PYTHONPATH=. python examples/authorityd/daemon_endpoint_check.py
 ```
+
+## Okta compatibility example notes
+
+For Okta OBO/token-exchange compatibility setup and troubleshooting, see:
+
+- `examples/README_Okta.md`
