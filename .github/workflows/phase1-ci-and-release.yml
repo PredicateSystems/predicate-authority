@@ -26,7 +26,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip pre-commit pytest
+        run: |
+          python -m pip install --upgrade pip pre-commit pytest
+          python -m pip install -e predicate_contracts -e predicate_authority
 
       - name: Verify package release order
         run: python scripts/verify_release_order.py
