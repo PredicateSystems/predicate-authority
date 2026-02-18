@@ -191,6 +191,45 @@ Checkpoints:
 - validation error includes a reason category (e.g. issuer mismatch),
 - error text does not include raw token string or sensitive claim values.
 
+4) Okta token exchange/OBO compatibility (tenant capability-gated):
+
+```bash
+# If tenant supports token exchange:
+export OKTA_OBO_COMPAT_CHECK_ENABLED=1
+export OKTA_SUPPORTS_TOKEN_EXCHANGE=true
+python3 -m pytest tests/test_okta_obo_compatibility.py -k "live_check_when_enabled"
+
+# If tenant does NOT support token exchange:
+export OKTA_OBO_COMPAT_CHECK_ENABLED=1
+export OKTA_SUPPORTS_TOKEN_EXCHANGE=false
+python3 -m pytest tests/test_okta_obo_compatibility.py -k "live_check_when_enabled"
+```
+
+Checkpoints:
+
+- `client_credentials_ok` must pass in both modes,
+- when `OKTA_SUPPORTS_TOKEN_EXCHANGE=true`, token exchange must succeed,
+- when `OKTA_SUPPORTS_TOKEN_EXCHANGE=false`, token exchange path is explicitly gated as tenant-disabled (no false failure).
+
+### Example demo script: Okta delegation compatibility
+
+Run example from repo root:
+
+```bash
+python3 examples/delegation/okta_obo_compat_demo.py \
+  --issuer "$OKTA_ISSUER" \
+  --client-id "$OKTA_CLIENT_ID" \
+  --client-secret "$OKTA_CLIENT_SECRET" \
+  --audience "$OKTA_AUDIENCE" \
+  --scope "${OKTA_SCOPE:-authority:check}" \
+  --supports-token-exchange
+```
+
+Notes:
+
+- omit `--supports-token-exchange` for tenants that do not support OBO/token exchange,
+- script reports whether delegation path should use IdP token exchange or authority mandate delegation.
+
 ### Secret storage policy (Okta credentials)
 
 - never commit Okta client secrets/API tokens/private keys to repo files,

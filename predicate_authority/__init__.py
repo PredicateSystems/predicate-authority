@@ -33,6 +33,13 @@ from predicate_authority.local_identity import (
     TaskIdentityRecord,
 )
 from predicate_authority.mandate import LocalMandateSigner
+from predicate_authority.okta_compat import (
+    OktaCompatibilityConfig,
+    OktaCompatibilityError,
+    OktaTenantCapabilities,
+    parse_bool,
+    run_okta_obo_compatibility_check,
+)
 from predicate_authority.policy import PolicyEngine, PolicyMatchResult
 from predicate_authority.policy_source import PolicyFileSource, PolicyReloadResult
 from predicate_authority.proof import InMemoryProofLedger
@@ -79,6 +86,9 @@ __all__ = [
     "OktaIdentityBridge",
     "OktaTokenClaims",
     "OpenTelemetryTraceEmitter",
+    "OktaCompatibilityConfig",
+    "OktaCompatibilityError",
+    "OktaTenantCapabilities",
     "PolicyEngine",
     "PolicyFileSource",
     "PolicyMatchResult",
@@ -94,4 +104,6 @@ __all__ = [
     "TaskIdentityRecord",
     "TokenValidationError",
     "UsageCreditRecord",
+    "parse_bool",
+    "run_okta_obo_compatibility_check",
 ]
