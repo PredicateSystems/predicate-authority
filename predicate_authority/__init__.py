@@ -22,6 +22,12 @@ from predicate_authority.control_plane import (
     UsageCreditRecord,
 )
 from predicate_authority.daemon import DaemonConfig, PredicateAuthorityDaemon
+from predicate_authority.entra_compat import (
+    EntraCompatibilityConfig,
+    EntraCompatibilityError,
+    EntraTenantCapabilities,
+    run_entra_obo_compatibility_check,
+)
 from predicate_authority.errors import AuthorizationDeniedError
 from predicate_authority.guard import ActionExecutionResult, ActionGuard
 from predicate_authority.local_identity import (
@@ -66,8 +72,11 @@ __all__ = [
     "ControlPlaneTraceEmitter",
     "CredentialRecord",
     "DaemonConfig",
+    "EntraCompatibilityConfig",
+    "EntraCompatibilityError",
     "EntraBridgeConfig",
     "EntraIdentityBridge",
+    "EntraTenantCapabilities",
     "IdentityBridge",
     "IdentityProviderType",
     "InMemoryProofLedger",
@@ -106,4 +115,5 @@ __all__ = [
     "UsageCreditRecord",
     "parse_bool",
     "run_okta_obo_compatibility_check",
+    "run_entra_obo_compatibility_check",
 ]

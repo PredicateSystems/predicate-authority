@@ -131,6 +131,17 @@ See runnable examples in:
 - `examples/mcp_tool_guard_example.py`
 - `examples/outbound_http_guard_example.py`
 
+### Entra quick command (compatibility check)
+
+```bash
+set -a && source .env && set +a
+python examples/delegation/entra_obo_compat_demo.py \
+  --tenant-id "$ENTRA_TENANT_ID" \
+  --client-id "$ENTRA_CLIENT_ID" \
+  --client-secret "$ENTRA_CLIENT_SECRET" \
+  --scope "$ENTRA_SCOPE"
+```
+
 ## Operations CLI
 
 `predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.

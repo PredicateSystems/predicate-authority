@@ -230,6 +230,43 @@ Notes:
 - omit `--supports-token-exchange` for tenants that do not support OBO/token exchange,
 - script reports whether delegation path should use IdP token exchange or authority mandate delegation.
 
+### Entra OBO compatibility (capability-gated)
+
+```bash
+export ENTRA_OBO_COMPAT_CHECK_ENABLED=1
+
+# Tenant supports OBO and user assertion is available:
+export ENTRA_SUPPORTS_OBO=true
+export ENTRA_USER_ASSERTION="<user-assertion-jwt>"
+python3 -m pytest tests/test_entra_obo_compatibility.py -k "live_check_when_enabled"
+
+# Tenant does NOT support OBO (or app policy not enabled):
+export ENTRA_SUPPORTS_OBO=false
+python3 -m pytest tests/test_entra_obo_compatibility.py -k "live_check_when_enabled"
+```
+
+Run demo script:
+
+```bash
+python examples/delegation/entra_obo_compat_demo.py \
+  --tenant-id "$ENTRA_TENANT_ID" \
+  --client-id "$ENTRA_CLIENT_ID" \
+  --client-secret "$ENTRA_CLIENT_SECRET" \
+  --scope "$ENTRA_SCOPE"
+```
+
+If OBO is supported and you have a user assertion:
+
+```bash
+python examples/delegation/entra_obo_compat_demo.py \
+  --tenant-id "$ENTRA_TENANT_ID" \
+  --client-id "$ENTRA_CLIENT_ID" \
+  --client-secret "$ENTRA_CLIENT_SECRET" \
+  --scope "$ENTRA_SCOPE" \
+  --user-assertion "$ENTRA_USER_ASSERTION" \
+  --supports-obo
+```
+
 ### Secret storage policy (Okta credentials)
 
 - never commit Okta client secrets/API tokens/private keys to repo files,

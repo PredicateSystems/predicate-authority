@@ -5,6 +5,7 @@ It binds identity, policy, and runtime evidence so risky actions are authorized
 before execution and denied fail-closed when checks do not pass.
 
 Docs: https://www.PredicateSystems.ai/docs
+Github Repo: https://github.com/PredicateSystems/predicate-authority
 
 Core pieces:
 
@@ -15,3 +16,58 @@ Core pieces:
 - typed integration adapters (including `sdk-python` mapping helpers),
 - control-plane client primitives for shipping proof and usage batches to hosted APIs,
 - local identity registry primitives (ephemeral task identities + local flush queue).
+
+## Quick usage example
+
+```python
+from predicate_authority import ActionGuard, InMemoryProofLedger, LocalMandateSigner, PolicyEngine
+from predicate_contracts import (
+    ActionRequest,
+    ActionSpec,
+    PolicyEffect,
+    PolicyRule,
+    PrincipalRef,
+    StateEvidence,
+    VerificationEvidence,
+)
+
+guard = ActionGuard(
+    policy_engine=PolicyEngine(
+        rules=(
+            PolicyRule(
+                name="allow-orders",
+                effect=PolicyEffect.ALLOW,
+                principals=("agent:orders",),
+                actions=("http.post",),
+                resources=("https://api.vendor.com/orders",),
+            ),
+        )
+    ),
+    mandate_signer=LocalMandateSigner(secret_key="replace-with-strong-secret"),
+    proof_ledger=InMemoryProofLedger(),
+)
+
+request = ActionRequest(
+    principal=PrincipalRef(principal_id="agent:orders", tenant_id="tenant-a"),
+    action_spec=ActionSpec(
+        action="http.post",
+        resource="https://api.vendor.com/orders",
+        intent="create order",
+    ),
+    state_evidence=StateEvidence(source="backend", state_hash="sha256:example"),
+    verification_evidence=VerificationEvidence(),
+)
+
+decision = guard.authorize(request)
+print("allowed=", decision.allowed, "reason=", decision.reason.value)
+```
+
+## Entra compatibility demo (capability-gated OBO)
+
+```bash
+python examples/delegation/entra_obo_compat_demo.py \
+  --tenant-id "$ENTRA_TENANT_ID" \
+  --client-id "$ENTRA_CLIENT_ID" \
+  --client-secret "$ENTRA_CLIENT_SECRET" \
+  --scope "${ENTRA_SCOPE:-api://predicate-authority/.default}"
+```
