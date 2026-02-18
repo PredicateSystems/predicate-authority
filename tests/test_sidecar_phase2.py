@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -14,6 +15,8 @@ from predicate_authority import (
     LocalRevocationCache,
     OIDCBridgeConfig,
     OIDCIdentityBridge,
+    OktaBridgeConfig,
+    OktaIdentityBridge,
     PolicyEngine,
     PredicateAuthoritySidecar,
     SidecarConfig,
@@ -138,3 +141,68 @@ def test_sidecar_revocation_and_policy_hot_reload(tmp_path: Path) -> None:
     assert allowed.allowed is True
     assert revoked.allowed is False
     assert revoked.reason == AuthorizationReason.INVALID_MANDATE
+
+
+def test_sidecar_okta_identity_revocation_and_killswitch_flow(tmp_path: Path) -> None:
+    policy_engine = PolicyEngine(
+        rules=(
+            PolicyRule(
+                name="allow-orders",
+                effect=PolicyEffect.ALLOW,
+                principals=("agent:*",),
+                actions=("http.*",),
+                resources=("https://api.vendor.com/*",),
+            ),
+        )
+    )
+    proof_ledger = InMemoryProofLedger()
+    sidecar = PredicateAuthoritySidecar(
+        config=SidecarConfig(mode=AuthorityMode.LOCAL_ONLY),
+        action_guard=_guard(policy_engine, proof_ledger),
+        proof_ledger=proof_ledger,
+        identity_bridge=OktaIdentityBridge(
+            OktaBridgeConfig(
+                issuer="https://dev-123456.okta.com/oauth2/default",
+                client_id="okta-client-id",
+                audience="api://predicate-authority",
+                allowed_signing_algs=("HS256",),
+            )
+        ),
+        credential_store=LocalCredentialStore(str(tmp_path / "credentials.json")),
+        revocation_cache=LocalRevocationCache(),
+        policy_engine=policy_engine,
+    )
+    request = ActionRequest(
+        principal=PrincipalRef(principal_id="agent:okta-user-1"),
+        action_spec=ActionSpec(
+            action="http.post",
+            resource="https://api.vendor.com/orders",
+            intent="create order",
+        ),
+        state_evidence=StateEvidence(source="backend", state_hash="state-abc"),
+        verification_evidence=VerificationEvidence(),
+    )
+
+    allowed = sidecar.issue_mandate(request)
+    assert allowed.allowed is True
+    sidecar.revoke_by_invariant("agent:okta-user-1")
+    denied_principal = sidecar.issue_mandate(request)
+    assert denied_principal.allowed is False
+    assert denied_principal.reason == AuthorizationReason.INVALID_MANDATE
+
+    # Intent-level kill-switch should also deny when principal is otherwise allowed.
+    request_for_killswitch = ActionRequest(
+        principal=PrincipalRef(principal_id="agent:okta-user-2"),
+        action_spec=request.action_spec,
+        state_evidence=request.state_evidence,
+        verification_evidence=request.verification_evidence,
+    )
+    pre_killswitch = sidecar.issue_mandate(request_for_killswitch)
+    assert pre_killswitch.allowed is True
+    intent_hash = hashlib.sha256(
+        request_for_killswitch.action_spec.intent.encode("utf-8")
+    ).hexdigest()
+    sidecar.revoke_intent_hash(intent_hash)
+    denied_intent = sidecar.issue_mandate(request_for_killswitch)
+    assert denied_intent.allowed is False
+    assert denied_intent.reason == AuthorizationReason.INVALID_MANDATE

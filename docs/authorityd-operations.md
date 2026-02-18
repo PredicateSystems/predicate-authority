@@ -94,7 +94,7 @@ Use this section when validating enterprise IdP readiness for Phase 2.
 - [ ] Validate JWKS retrieval and cache behavior for normal operation.
 - [ ] Validate key rotation behavior (`kid` rollover) without service restart.
 - [ ] Validate fail-closed behavior for cold-start JWKS failure and stale key scenarios.
-- [ ] Validate redaction: no token/secret leakage in logs on failures/retries.
+- [x] Validate redaction: no token/secret leakage in logs on failures/retries.
 - [x] Validate startup diagnostics for missing/invalid auth configuration.
 - [ ] Validate revocation path behavior under Okta-backed principals.
 
@@ -115,6 +115,43 @@ Use this section when validating enterprise IdP readiness for Phase 2.
 | OKTA-11 | Tenant outside allow-list | Denied with tenant policy reason |
 | OKTA-12 | Principal/intent revocation during run | Subsequent action denied promptly |
 | OKTA-13 | Log redaction check | No raw tokens/secrets in logs |
+
+### Emergency JWKS key-rotation runbook (owner + on-call flow)
+
+Owner model:
+
+- Primary owner: Platform Identity On-call.
+- Secondary owner: Security On-call (approver for forced key disable).
+- Incident commander: Platform lead on duty.
+
+Trigger conditions:
+
+- compromised signing key suspected,
+- unexpected `kid` churn causing authorization failures,
+- emergency tenant request to invalidate active key material.
+
+Runbook steps:
+
+1. **Declare incident + freeze risky deploys**
+   - open incident channel and assign owner/approver,
+   - freeze policy/auth-related deploy pipelines until stabilized.
+2. **Rotate signing key in Okta**
+   - publish new signing key and ensure new `kid` appears in JWKS,
+   - stop issuing tokens from compromised/old key.
+3. **Force validation against refreshed JWKS**
+   - run targeted validation:
+     - `python3 -m pytest tests/test_identity_bridge_phase2.py -k "jwks_kid_rollover_refreshes_without_restart"`
+   - if runtime impact is active, temporarily reduce cache TTL and trigger sidecar restart waves.
+4. **Confirm deny behavior for old/unknown `kid`**
+   - run:
+     - `python3 -m pytest tests/test_identity_bridge_phase2.py -k "jwks_stale_cache_and_outage_fails_closed_with_diagnostics"`
+   - verify fail-closed behavior remains active.
+5. **Recovery validation**
+   - confirm healthy authorization path with new `kid`,
+   - confirm no broad deny regressions in tenant traffic.
+6. **Closeout**
+   - document timeline, affected tenants, and remediation actions,
+   - restore deploy pipeline and publish post-incident notes.
 
 ### Signoff evidence commands (deterministic integration tests)
 
@@ -143,6 +180,25 @@ Checkpoints:
 - post-restart `POST /ledger/flush-now` reports `sent_count >= 1`,
 - post-flush queue is empty (`GET /ledger/flush-queue` returns no items).
 
+3) Redaction and failure-reason validation:
+
+```bash
+python3 -m pytest tests/test_identity_bridge_phase2.py -k "reasonful_and_redacted"
+```
+
+Checkpoints:
+
+- validation error includes a reason category (e.g. issuer mismatch),
+- error text does not include raw token string or sensitive claim values.
+
+### Secret storage policy (Okta credentials)
+
+- never commit Okta client secrets/API tokens/private keys to repo files,
+- store Okta credentials in runtime secret manager and CI secret store only,
+- CI enforcement:
+  - `scripts/check_no_plaintext_okta_secrets.py` scans for plaintext Okta secrets,
+  - auth module security checks run Bandit for `predicate_authority` auth paths.
+
 When enabled, daemon bootstrap auto-attaches `ControlPlaneTraceEmitter` so each
 authority decision pushes:
 
@@ -170,8 +226,32 @@ PYTHONPATH=. predicate-authorityd \
   --okta-issuer "$OKTA_ISSUER" \
   --okta-client-id "$OKTA_CLIENT_ID" \
   --okta-audience "$OKTA_AUDIENCE" \
+  --okta-required-claims "sub,tenant_id" \
+  --okta-required-scopes "authority:check" \
+  --okta-required-roles "authority-operator" \
+  --okta-allowed-tenants "tenant-a" \
+  --idp-token-ttl-s 300 \
+  --mandate-ttl-s 300 \
   --policy-file examples/authorityd/policy.json
 ```
+
+Safety gate note:
+
+- in `cloud_connected` mode, `identity-mode local` or `identity-mode local-idp` now requires explicit `--allow-local-fallback`,
+- this prevents accidental implicit downgrade to local identity behavior.
+
+TTL alignment note:
+
+- startup enforces `idp-token-ttl-s >= mandate-ttl-s` to avoid mandates outliving identity session controls.
+
+### Emergency rollback route (Okta integration)
+
+If Okta integration causes broad auth failures, use this rollback sequence:
+
+1. disable the affected Okta app integration for the impacted environment,
+2. rotate signing keys and invalidate compromised sessions in Okta,
+3. switch sidecar traffic to a known-good identity config (or controlled local fallback with explicit `--allow-local-fallback`),
+4. verify deny behavior + recovery through signoff evidence commands before restoring normal traffic.
 
 ## 3b) Optional local identity registry (ephemeral task identities)
 

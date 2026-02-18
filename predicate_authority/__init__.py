@@ -9,7 +9,9 @@ from predicate_authority.bridge import (
     OIDCIdentityBridge,
     OktaBridgeConfig,
     OktaIdentityBridge,
+    OktaTokenClaims,
     TokenExchangeResult,
+    TokenValidationError,
 )
 from predicate_authority.client import AuthorityClient, LocalAuthorizationContext
 from predicate_authority.control_plane import (
@@ -75,6 +77,7 @@ __all__ = [
     "OIDCIdentityBridge",
     "OktaBridgeConfig",
     "OktaIdentityBridge",
+    "OktaTokenClaims",
     "OpenTelemetryTraceEmitter",
     "PolicyEngine",
     "PolicyFileSource",
@@ -89,5 +92,6 @@ __all__ = [
     "CompositeTraceEmitter",
     "LedgerQueueItem",
     "TaskIdentityRecord",
+    "TokenValidationError",
     "UsageCreditRecord",
 ]

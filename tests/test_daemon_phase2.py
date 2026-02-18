@@ -34,6 +34,7 @@ from predicate_authority.daemon import (
     LocalIdentityBootstrapConfig,
     _build_default_sidecar,
     _build_identity_bridge_from_args,
+    _validate_ttl_alignment,
 )
 from predicate_contracts import (
     ActionRequest,
@@ -440,7 +441,9 @@ def test_daemon_identity_mode_local_idp_builder() -> None:
 
 def test_daemon_identity_mode_okta_builder() -> None:
     args = Namespace(
+        mode="local_only",
         identity_mode="okta",
+        allow_local_fallback=False,
         idp_token_ttl_s=120,
         local_idp_issuer="http://localhost/local-idp",
         local_idp_audience="api://predicate-authority",
@@ -463,9 +466,56 @@ def test_daemon_identity_mode_okta_builder() -> None:
     assert token.provider.value == "okta"
 
 
+def test_daemon_identity_mode_okta_builder_maps_claim_scope_role_config() -> None:
+    args = Namespace(
+        mode="local_only",
+        identity_mode="okta",
+        allow_local_fallback=False,
+        idp_token_ttl_s=300,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer="https://dev-123456.okta.com/oauth2/default",
+        okta_client_id="okta-client-id",
+        okta_audience="api://predicate-authority",
+        okta_required_claims=["sub,tenant_id"],
+        okta_allowed_tenants=["tenant-a"],
+        okta_required_scopes=["authority:check"],
+        okta_required_roles=["authority-operator"],
+        okta_tenant_claim="tenant_id",
+        okta_scope_claim="scope",
+        okta_role_claim="groups",
+    )
+    bridge = _build_identity_bridge_from_args(args)
+    token = (
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2lkIn0."
+        "eyJpc3MiOiJodHRwczovL2Rldi0xMjM0NTYub2t0YS5jb20vb2F1dGgyL2RlZmF1bHQiLCJhdWQiOiJhcGk6Ly9wcmVkaWNhdGUtYXV0aG9yaXR5Iiwic3ViIjoiYWdlbnQ6dGVzdCIsInRlbmFudF9pZCI6InRlbmFudC1hIiwic2NvcGUiOiJhdXRob3JpdHk6Y2hlY2siLCJncm91cHMiOlsiYXV0aG9yaXR5LW9wZXJhdG9yIl0sImV4cCI6MTEwMCwiaWF0IjoxMDAwfQ."
+        "eyJzaWciOiJ0ZXN0In0"
+    )
+    assert hasattr(bridge, "validate_token_claims")
+    bridge.validate_token_claims(token, now_epoch_s=1000)  # type: ignore[attr-defined]
+
+
+def test_validate_ttl_alignment_rejects_idp_shorter_than_mandate() -> None:
+    with pytest.raises(SystemExit):
+        _validate_ttl_alignment(idp_token_ttl_s=120, mandate_ttl_s=300)
+
+
+def test_validate_ttl_alignment_accepts_aligned_values() -> None:
+    _validate_ttl_alignment(idp_token_ttl_s=300, mandate_ttl_s=300)
+
+
 def test_daemon_identity_mode_okta_requires_args() -> None:
     args = Namespace(
+        mode="local_only",
         identity_mode="okta",
+        allow_local_fallback=False,
         idp_token_ttl_s=120,
         local_idp_issuer="http://localhost/local-idp",
         local_idp_audience="api://predicate-authority",
@@ -482,6 +532,56 @@ def test_daemon_identity_mode_okta_requires_args() -> None:
     )
     with pytest.raises(SystemExit):
         _build_identity_bridge_from_args(args)
+
+
+def test_daemon_cloud_connected_local_identity_requires_explicit_fallback() -> None:
+    args = Namespace(
+        mode="cloud_connected",
+        identity_mode="local",
+        allow_local_fallback=False,
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer=None,
+        okta_client_id=None,
+        okta_audience=None,
+    )
+    with pytest.raises(SystemExit):
+        _build_identity_bridge_from_args(args)
+
+
+def test_daemon_cloud_connected_local_identity_allows_with_explicit_fallback() -> None:
+    args = Namespace(
+        mode="cloud_connected",
+        identity_mode="local",
+        allow_local_fallback=True,
+        idp_token_ttl_s=120,
+        local_idp_issuer="http://localhost/local-idp",
+        local_idp_audience="api://predicate-authority",
+        local_idp_signing_key_env="LOCAL_IDP_SIGNING_KEY",
+        oidc_issuer=None,
+        oidc_client_id=None,
+        oidc_audience=None,
+        entra_tenant_id=None,
+        entra_client_id=None,
+        entra_audience=None,
+        okta_issuer=None,
+        okta_client_id=None,
+        okta_audience=None,
+    )
+    bridge = _build_identity_bridge_from_args(args)
+    token = bridge.exchange_token(
+        PrincipalRef(principal_id="agent:test"),
+        StateEvidence(source="test", state_hash="state-1"),
+    )
+    assert token.provider.value == "local"
 
 
 def test_daemon_local_identity_registry_endpoints(tmp_path: Path) -> None:

@@ -25,8 +25,13 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          python -m pip install --upgrade pip pytest
+          python -m pip install --upgrade pip pytest bandit
           python -m pip install -e predicate_contracts -e predicate_authority
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Run auth module security checks
+        run: |
+          python -m bandit -q -r predicate_authority/bridge.py predicate_authority/daemon.py predicate_authority/control_plane.py
+          python scripts/check_no_plaintext_okta_secrets.py

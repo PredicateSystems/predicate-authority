@@ -615,6 +615,7 @@ def _build_default_sidecar(
     local_identity_config: LocalIdentityBootstrapConfig | None = None,
     identity_bridge: ExchangeTokenBridge | None = None,
     mandate_signing_key: str | None = None,
+    mandate_ttl_seconds: int = 300,
 ) -> PredicateAuthoritySidecar:
     policy_rules: tuple[PolicyRule, ...] = ()
     global_max_delegation_depth: int | None = None
@@ -670,7 +671,10 @@ def _build_default_sidecar(
 
     guard = ActionGuard(
         policy_engine=policy_engine,
-        mandate_signer=LocalMandateSigner(secret_key=mandate_signing_key or secrets.token_hex(32)),
+        mandate_signer=LocalMandateSigner(
+            secret_key=mandate_signing_key or secrets.token_hex(32),
+            ttl_seconds=max(1, int(mandate_ttl_seconds)),
+        ),
         proof_ledger=proof_ledger,
     )
     return PredicateAuthoritySidecar(
@@ -687,6 +691,14 @@ def _build_default_sidecar(
 
 def _build_identity_bridge_from_args(args: argparse.Namespace) -> ExchangeTokenBridge:
     mode = str(args.identity_mode)
+    authority_mode = str(getattr(args, "mode", AuthorityMode.LOCAL_ONLY.value))
+    allow_local_fallback = bool(getattr(args, "allow_local_fallback", False))
+    if authority_mode == AuthorityMode.CLOUD_CONNECTED.value and mode in {"local", "local-idp"}:
+        if not allow_local_fallback:
+            raise SystemExit(
+                "cloud_connected mode with local/local-idp identity requires explicit "
+                "--allow-local-fallback acknowledgement."
+            )
     if mode == "local":
         return IdentityBridge(token_ttl_seconds=int(args.idp_token_ttl_s))
     if mode == "local-idp":
@@ -734,15 +746,68 @@ def _build_identity_bridge_from_args(args: argparse.Namespace) -> ExchangeTokenB
             raise SystemExit(
                 "identity-mode=okta requires --okta-issuer, --okta-client-id, and --okta-audience."
             )
+        okta_required_claims = _parse_multi_string_values(
+            getattr(args, "okta_required_claims", None)
+        )
+        okta_required_scopes = _parse_multi_string_values(
+            getattr(args, "okta_required_scopes", None)
+        )
+        okta_required_roles = _parse_multi_string_values(getattr(args, "okta_required_roles", None))
+        okta_allowed_tenants = _parse_multi_string_values(
+            getattr(args, "okta_allowed_tenants", None)
+        )
         return OktaIdentityBridge(
             OktaBridgeConfig(
                 issuer=str(args.okta_issuer),
                 client_id=str(args.okta_client_id),
                 audience=str(args.okta_audience),
                 token_ttl_seconds=int(args.idp_token_ttl_s),
+                required_claims=(
+                    tuple(okta_required_claims) if len(okta_required_claims) > 0 else ("sub",)
+                ),
+                tenant_claim=str(getattr(args, "okta_tenant_claim", "tenant_id")),
+                scope_claim=str(getattr(args, "okta_scope_claim", "scope")),
+                role_claim=str(getattr(args, "okta_role_claim", "groups")),
+                allowed_tenants=tuple(okta_allowed_tenants),
+                required_scopes=tuple(okta_required_scopes),
+                required_roles=tuple(okta_required_roles),
             )
         )
     raise SystemExit(f"Unsupported identity mode: {mode}")
+
+
+def _parse_multi_string_values(raw_values: object) -> list[str]:
+    if raw_values is None:
+        return []
+    if isinstance(raw_values, str):
+        values = [item.strip() for item in raw_values.split(",")]
+        return [item for item in values if item != ""]
+    if isinstance(raw_values, list):
+        parsed: list[str] = []
+        for item in raw_values:
+            if not isinstance(item, str):
+                continue
+            parts = [part.strip() for part in item.split(",")]
+            parsed.extend(part for part in parts if part != "")
+        # Keep insertion order while deduplicating.
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in parsed:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped
+    return []
+
+
+def _validate_ttl_alignment(idp_token_ttl_s: int, mandate_ttl_s: int) -> None:
+    if int(idp_token_ttl_s) <= 0 or int(mandate_ttl_s) <= 0:
+        raise SystemExit("--idp-token-ttl-s and --mandate-ttl-s must be > 0.")
+    if int(idp_token_ttl_s) < int(mandate_ttl_s):
+        raise SystemExit(
+            "idp token ttl must be >= mandate ttl to avoid mandate outliving identity session."
+        )
 
 
 def _resolve_mandate_signing_key(
@@ -792,7 +857,21 @@ def main() -> None:
         default="local",
         help="Identity source for token exchange: local, local-idp, oidc, entra, or okta.",
     )
+    parser.add_argument(
+        "--allow-local-fallback",
+        action="store_true",
+        help=(
+            "Explicitly allow local/local-idp identity while mode=cloud_connected. "
+            "Without this flag, implicit local fallback is denied."
+        ),
+    )
     parser.add_argument("--idp-token-ttl-s", type=int, default=300)
+    parser.add_argument(
+        "--mandate-ttl-s",
+        type=int,
+        default=int(os.getenv("PREDICATE_AUTHORITY_MANDATE_TTL_SECONDS", "300")),
+        help="Mandate token TTL seconds; should be aligned to IdP token/session strategy.",
+    )
     parser.add_argument(
         "--local-idp-issuer",
         default=os.getenv("LOCAL_IDP_ISSUER", "http://localhost/predicate-local-idp"),
@@ -815,6 +894,45 @@ def main() -> None:
     parser.add_argument("--okta-issuer", default=os.getenv("OKTA_ISSUER"))
     parser.add_argument("--okta-client-id", default=os.getenv("OKTA_CLIENT_ID"))
     parser.add_argument("--okta-audience", default=os.getenv("OKTA_AUDIENCE"))
+    parser.add_argument(
+        "--okta-required-claims",
+        action="append",
+        default=[],
+        help="Comma-separated required Okta claims. Can be repeated.",
+    )
+    parser.add_argument(
+        "--okta-allowed-tenants",
+        action="append",
+        default=[],
+        help="Comma-separated allowed tenant identifiers. Can be repeated.",
+    )
+    parser.add_argument(
+        "--okta-required-scopes",
+        action="append",
+        default=[],
+        help="Comma-separated required scope values. Can be repeated.",
+    )
+    parser.add_argument(
+        "--okta-required-roles",
+        action="append",
+        default=[],
+        help="Comma-separated required role/group values. Can be repeated.",
+    )
+    parser.add_argument(
+        "--okta-tenant-claim",
+        default=os.getenv("OKTA_TENANT_CLAIM", "tenant_id"),
+        help="Claim name carrying tenant identifier.",
+    )
+    parser.add_argument(
+        "--okta-scope-claim",
+        default=os.getenv("OKTA_SCOPE_CLAIM", "scope"),
+        help="Claim name carrying scopes.",
+    )
+    parser.add_argument(
+        "--okta-role-claim",
+        default=os.getenv("OKTA_ROLE_CLAIM", "groups"),
+        help="Claim name carrying roles/groups.",
+    )
     parser.add_argument(
         "--control-plane-enabled",
         action="store_true",
@@ -893,6 +1011,10 @@ def main() -> None:
         "CONTROL_PLANE_PROJECT_ID", "dev-project"
     )
     control_plane_enabled = bool(args.control_plane_enabled)
+    _validate_ttl_alignment(
+        idp_token_ttl_s=int(args.idp_token_ttl_s),
+        mandate_ttl_s=int(args.mandate_ttl_s),
+    )
     if control_plane_enabled and (control_plane_url is None or control_plane_url.strip() == ""):
         raise SystemExit(
             "control-plane is enabled but no URL provided. "
@@ -928,6 +1050,7 @@ def main() -> None:
         local_identity_config=local_identity_bootstrap,
         identity_bridge=identity_bridge,
         mandate_signing_key=mandate_signing_key,
+        mandate_ttl_seconds=int(args.mandate_ttl_s),
     )
     daemon = PredicateAuthorityDaemon(
         sidecar=sidecar,
