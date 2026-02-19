@@ -24,6 +24,7 @@ from predicate_authority.bridge import (
     OktaIdentityBridge,
 )
 from predicate_authority.control_plane import (
+    AuthoritySyncSnapshot,
     ControlPlaneClient,
     ControlPlaneClientConfig,
     ControlPlaneTraceEmitter,
@@ -36,8 +37,9 @@ from predicate_authority.local_identity import (
     LocalLedgerQueueEmitter,
 )
 from predicate_authority.mandate import LocalMandateSigner
+from predicate_authority.metrics import render_daemon_prometheus_metrics
 from predicate_authority.policy import PolicyEngine
-from predicate_authority.policy_source import PolicyFileSource
+from predicate_authority.policy_source import PolicyFileSource, parse_policy_payload
 from predicate_authority.proof import InMemoryProofLedger
 from predicate_authority.revocation import LocalRevocationCache
 from predicate_authority.sidecar import (
@@ -70,6 +72,11 @@ class ControlPlaneBootstrapConfig:
     backoff_initial_s: float = 0.2
     fail_open: bool = True
     usage_credits_per_decision: int = 1
+    sync_enabled: bool = False
+    sync_wait_timeout_s: float = 15.0
+    sync_poll_interval_ms: int = 200
+    sync_project_id: str | None = None
+    sync_environment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +108,12 @@ class DaemonRuntime:
     flush_quarantined_count: int = 0
     last_flush_epoch_s: float | None = None
     last_flush_error: str | None = None
+    sync_poll_count: int = 0
+    sync_update_count: int = 0
+    sync_error_count: int = 0
+    last_sync_epoch_s: float | None = None
+    last_sync_error: str | None = None
+    sync_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,11 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/status":
             self._send_json(200, self.server.daemon_ref.status_payload())  # type: ignore[attr-defined]
+            return
+        if parsed.path == "/metrics":
+            payload = self.server.daemon_ref.status_payload()  # type: ignore[attr-defined]
+            metrics = render_daemon_prometheus_metrics(payload)
+            self._send_text(200, metrics, "text/plain; version=0.0.4")
             return
         if parsed.path == "/identity/list":
             active_only = True
@@ -306,6 +324,14 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _send_text(self, code: int, payload: str, content_type: str = "text/plain") -> None:
+        encoded = payload.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
 
 class PredicateAuthorityDaemon:
     def __init__(
@@ -323,6 +349,7 @@ class PredicateAuthorityDaemon:
         self._server_thread: threading.Thread | None = None
         self._poll_thread: threading.Thread | None = None
         self._flush_thread: threading.Thread | None = None
+        self._sync_thread: threading.Thread | None = None
 
     @property
     def bound_port(self) -> int:
@@ -342,9 +369,11 @@ class PredicateAuthorityDaemon:
         self._server_thread = threading.Thread(target=self._http_server.serve_forever, daemon=True)
         self._poll_thread = threading.Thread(target=self._policy_poll_loop, daemon=True)
         self._flush_thread = threading.Thread(target=self._flush_queue_loop, daemon=True)
+        self._sync_thread = threading.Thread(target=self._control_plane_sync_loop, daemon=True)
         self._server_thread.start()
         self._poll_thread.start()
         self._flush_thread.start()
+        self._sync_thread.start()
 
     def stop(self) -> None:
         if not self._runtime.is_running:
@@ -360,6 +389,8 @@ class PredicateAuthorityDaemon:
             self._poll_thread.join(timeout=3.0)
         if self._flush_thread is not None:
             self._flush_thread.join(timeout=3.0)
+        if self._sync_thread is not None:
+            self._sync_thread.join(timeout=3.0)
 
     def health_payload(self) -> dict[str, Any]:
         uptime_s = int(max(0, time.time() - self._runtime.started_at_epoch_s))
@@ -387,6 +418,12 @@ class PredicateAuthorityDaemon:
                 "last_flush_epoch_s": self._runtime.last_flush_epoch_s,
                 "last_flush_error": self._runtime.last_flush_error,
                 "dead_letter_max_attempts": self._flush_worker.dead_letter_max_attempts,
+                "control_plane_sync_poll_count": self._runtime.sync_poll_count,
+                "control_plane_sync_update_count": self._runtime.sync_update_count,
+                "control_plane_sync_error_count": self._runtime.sync_error_count,
+                "control_plane_last_sync_epoch_s": self._runtime.last_sync_epoch_s,
+                "control_plane_last_sync_error": self._runtime.last_sync_error,
+                "control_plane_sync_token": self._runtime.sync_token,
             }
         )
         return payload
@@ -606,6 +643,46 @@ class PredicateAuthorityDaemon:
                     return emitter.client
         return None
 
+    def _control_plane_sync_loop(self) -> None:
+        while not self._stop_event.is_set():
+            client = self._resolve_control_plane_client()
+            if client is None or not client.config.sync_enabled:
+                self._stop_event.wait(timeout=1.0)
+                continue
+            try:
+                snapshot = client.poll_authority_updates(
+                    current_token=self._runtime.sync_token,
+                    wait_timeout_s=client.config.sync_wait_timeout_s,
+                    poll_interval_ms=client.config.sync_poll_interval_ms,
+                    project_id=client.config.sync_project_id,
+                    environment=client.config.sync_environment,
+                )
+                self._runtime.sync_poll_count += 1
+                self._runtime.last_sync_epoch_s = time.time()
+                self._runtime.sync_token = snapshot.sync_token
+                if snapshot.changed:
+                    self._apply_sync_snapshot(snapshot)
+                    self._runtime.sync_update_count += 1
+                self._runtime.last_sync_error = None
+            except Exception as exc:  # noqa: BLE001
+                self._runtime.sync_error_count += 1
+                self._runtime.last_sync_error = str(exc)
+                self._stop_event.wait(timeout=min(2.0, self._config.policy_poll_interval_s))
+
+    def _apply_sync_snapshot(self, snapshot: AuthoritySyncSnapshot) -> None:
+        if snapshot.policy_document is not None:
+            rules, global_depth = parse_policy_payload(snapshot.policy_document)
+            self._sidecar.replace_policy(rules=rules, global_max_delegation_depth=global_depth)
+        for item in snapshot.revocations:
+            if item.type == "principal" and item.principal_id is not None:
+                self._sidecar.revoke_by_invariant(item.principal_id)
+            elif item.type == "intent" and item.intent_hash is not None:
+                self._sidecar.revoke_intent_hash(item.intent_hash)
+            elif item.type == "tags":
+                # Tag revocation support is modeled in control-plane API but not yet represented in
+                # sidecar's revocation cache keys.
+                continue
+
 
 def _build_default_sidecar(
     mode: AuthorityMode,
@@ -642,6 +719,11 @@ def _build_default_sidecar(
                 max_retries=control_plane_config.max_retries,
                 backoff_initial_s=control_plane_config.backoff_initial_s,
                 fail_open=control_plane_config.fail_open,
+                sync_enabled=control_plane_config.sync_enabled,
+                sync_wait_timeout_s=control_plane_config.sync_wait_timeout_s,
+                sync_poll_interval_ms=control_plane_config.sync_poll_interval_ms,
+                sync_project_id=control_plane_config.sync_project_id,
+                sync_environment=control_plane_config.sync_environment,
             )
         )
         trace_emitters.append(
@@ -962,6 +1044,33 @@ def main() -> None:
     parser.add_argument("--control-plane-max-retries", type=int, default=2)
     parser.add_argument("--control-plane-backoff-initial-s", type=float, default=0.2)
     parser.add_argument(
+        "--control-plane-sync-enabled",
+        action="store_true",
+        help="Enable long-poll policy/revocation sync from control-plane.",
+    )
+    parser.add_argument(
+        "--control-plane-sync-wait-timeout-s",
+        type=float,
+        default=15.0,
+        help="Long-poll wait timeout per sync request.",
+    )
+    parser.add_argument(
+        "--control-plane-sync-poll-interval-ms",
+        type=int,
+        default=200,
+        help="Server-side polling interval for long-poll sync endpoint.",
+    )
+    parser.add_argument(
+        "--control-plane-sync-project-id",
+        default=None,
+        help="Optional project filter for synced policy snapshot.",
+    )
+    parser.add_argument(
+        "--control-plane-sync-environment",
+        default=None,
+        help="Optional environment filter for synced policy snapshot.",
+    )
+    parser.add_argument(
         "--flush-worker-enabled",
         action="store_true",
         help="Enable background local queue flush worker.",
@@ -1031,6 +1140,11 @@ def main() -> None:
         backoff_initial_s=args.control_plane_backoff_initial_s,
         fail_open=bool(args.control_plane_fail_open),
         usage_credits_per_decision=max(0, int(args.control_plane_usage_credits_per_decision)),
+        sync_enabled=bool(args.control_plane_sync_enabled),
+        sync_wait_timeout_s=max(0.0, float(args.control_plane_sync_wait_timeout_s)),
+        sync_poll_interval_ms=max(50, int(args.control_plane_sync_poll_interval_ms)),
+        sync_project_id=args.control_plane_sync_project_id,
+        sync_environment=args.control_plane_sync_environment,
     )
     local_identity_bootstrap = LocalIdentityBootstrapConfig(
         enabled=bool(args.local_identity_enabled),

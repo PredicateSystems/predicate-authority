@@ -172,6 +172,12 @@ predicate-authorityd \
 
 `predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
 
+### Ops docs quick links
+
+- Sidecar operations guide: `docs/authorityd-operations.md`
+- User manual (sync/integrity/operator behaviors): `docs/predicate-authority-user-manual.md`
+- Control-plane production hardening runbook: `../predicate-authority-control-plane/docs/production-hardening-runbook.md`
+
 ### Sidecar health and status
 
 ```bash
