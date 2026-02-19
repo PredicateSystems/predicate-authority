@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,32 +27,10 @@ class PolicyFileSource:
 
     def load_policy(self) -> tuple[tuple[PolicyRule, ...], int | None]:
         payload = self._load_payload(self._policy_path.read_text(encoding="utf-8"))
-        rules_payload = payload.get("rules", [])
-        rules: list[PolicyRule] = []
-        for item in rules_payload:
-            rules.append(
-                PolicyRule(
-                    name=item["name"],
-                    effect=PolicyEffect(item["effect"]),
-                    principals=tuple(item["principals"]),
-                    actions=tuple(item["actions"]),
-                    resources=tuple(item["resources"]),
-                    required_labels=tuple(item.get("required_labels", [])),
-                    max_delegation_depth=(
-                        int(item["max_delegation_depth"])
-                        if item.get("max_delegation_depth") is not None
-                        else None
-                    ),
-                )
-            )
+        rules, global_max_delegation_depth = parse_policy_payload(payload)
         stat = self._policy_path.stat()
         self._last_mtime_ns = stat.st_mtime_ns
-        global_max_delegation_depth = (
-            int(payload["global_max_delegation_depth"])
-            if payload.get("global_max_delegation_depth") is not None
-            else None
-        )
-        return tuple(rules), global_max_delegation_depth
+        return rules, global_max_delegation_depth
 
     def _load_payload(self, raw: str) -> dict[str, Any]:
         suffix = self._policy_path.suffix.lower()
@@ -80,3 +59,33 @@ class PolicyFileSource:
                 global_max_delegation_depth=global_max_delegation_depth,
             )
         return PolicyReloadResult(changed=False, rules=(), global_max_delegation_depth=None)
+
+
+def parse_policy_payload(payload: Mapping[str, Any]) -> tuple[tuple[PolicyRule, ...], int | None]:
+    rules_payload = payload.get("rules", [])
+    rules: list[PolicyRule] = []
+    if isinstance(rules_payload, list):
+        for item in rules_payload:
+            if not isinstance(item, Mapping):
+                continue
+            rules.append(
+                PolicyRule(
+                    name=str(item["name"]),
+                    effect=PolicyEffect(str(item["effect"])),
+                    principals=tuple(str(value) for value in item["principals"]),
+                    actions=tuple(str(value) for value in item["actions"]),
+                    resources=tuple(str(value) for value in item["resources"]),
+                    required_labels=tuple(str(value) for value in item.get("required_labels", [])),
+                    max_delegation_depth=(
+                        int(item["max_delegation_depth"])
+                        if item.get("max_delegation_depth") is not None
+                        else None
+                    ),
+                )
+            )
+    global_max_delegation_depth = (
+        int(payload["global_max_delegation_depth"])
+        if payload.get("global_max_delegation_depth") is not None
+        else None
+    )
+    return tuple(rules), global_max_delegation_depth

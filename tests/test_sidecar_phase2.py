@@ -206,3 +206,40 @@ def test_sidecar_okta_identity_revocation_and_killswitch_flow(tmp_path: Path) ->
     denied_intent = sidecar.issue_mandate(request_for_killswitch)
     assert denied_intent.allowed is False
     assert denied_intent.reason == AuthorizationReason.INVALID_MANDATE
+
+
+def test_sidecar_rate_limit_denies_when_principal_exceeds_burst(tmp_path: Path) -> None:
+    policy_engine = PolicyEngine(
+        rules=(
+            PolicyRule(
+                name="allow-orders",
+                effect=PolicyEffect.ALLOW,
+                principals=("agent:*",),
+                actions=("http.*",),
+                resources=("https://api.vendor.com/*",),
+            ),
+        )
+    )
+    proof_ledger = InMemoryProofLedger()
+    sidecar = PredicateAuthoritySidecar(
+        config=SidecarConfig(
+            mode=AuthorityMode.LOCAL_ONLY,
+            principal_rate_limit_enabled=True,
+            principal_rate_limit_requests_per_second=0.0,
+            principal_rate_limit_burst_size=1,
+        ),
+        action_guard=_guard(policy_engine, proof_ledger),
+        proof_ledger=proof_ledger,
+        identity_bridge=IdentityBridge(),
+        credential_store=LocalCredentialStore(str(tmp_path / "credentials.json")),
+        revocation_cache=LocalRevocationCache(),
+        policy_engine=policy_engine,
+    )
+
+    first = sidecar.issue_mandate(_request())
+    second = sidecar.issue_mandate(_request())
+
+    assert first.allowed is True
+    assert second.allowed is False
+    assert second.reason == AuthorizationReason.RATE_LIMIT_EXCEEDED
+    assert second.violated_rule == "principal_rate_limiter"

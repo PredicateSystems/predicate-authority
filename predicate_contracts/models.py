@@ -22,6 +22,7 @@ class AuthorizationReason(str, Enum):
     MISSING_REQUIRED_VERIFICATION = "missing_required_verification"
     MAX_DELEGATION_DEPTH_EXCEEDED = "max_delegation_depth_exceeded"
     INVALID_MANDATE = "invalid_mandate"
+    RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
 
 
 @dataclass(frozen=True)

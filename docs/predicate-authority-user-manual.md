@@ -441,6 +441,46 @@ curl -s -X POST http://127.0.0.1:8787/ledger/requeue \
 
 ---
 
+## Control-plane sync and integrity quick checks
+
+If you run `predicate-authorityd` with control-plane enabled, you can also enable
+long-poll sync to pull policy/revocation updates continuously:
+
+```bash
+predicate-authorityd \
+  --mode cloud_connected \
+  --policy-file examples/authorityd/policy.json \
+  --control-plane-enabled \
+  --control-plane-sync-enabled \
+  --control-plane-sync-project-id "dev-project" \
+  --control-plane-sync-environment "prod"
+```
+
+Check sync counters from daemon:
+
+```bash
+curl -s http://127.0.0.1:8787/status | jq '.control_plane_sync_poll_count, .control_plane_sync_update_count, .control_plane_sync_error_count'
+```
+
+From control-plane, verify tamper-evident audit integrity endpoints:
+
+```bash
+curl -s "http://127.0.0.1:8080/v1/audit/integrity/root?tenant_id=tenant-a" \
+  -H "Authorization: Bearer $TOKEN" | jq
+
+curl -s "http://127.0.0.1:8080/v1/audit/integrity/proof/<event_id>?tenant_id=tenant-a" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+Operational notes:
+
+- control-plane may return `503 store_circuit_open:<operation>` during upstream DB distress,
+- if Kafka streaming is enabled in fail-closed mode, event-stream outages can return
+  `503 event_stream_unavailable:<topic>`,
+- in fail-open mode, core authority decisions continue even if stream publish fails.
+
+---
+
 ## `sdk-python` integration example (boundary adapter flow)
 
 If your web agent uses `sdk-python`, build shared contract evidence before

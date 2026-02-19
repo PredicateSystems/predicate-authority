@@ -63,6 +63,40 @@ PYTHONPATH=. predicate-authorityd \
   --control-plane-fail-open
 ```
 
+### Optional: enable long-poll policy/revocation sync from control-plane
+
+Use this when running `cloud_connected` mode and you want active policy/revocation
+updates pushed through long-poll sync instead of waiting for file-based policy polling.
+
+```bash
+export CONTROL_PLANE_URL="http://127.0.0.1:8080"
+export CONTROL_PLANE_TENANT_ID="dev-tenant"
+export CONTROL_PLANE_PROJECT_ID="dev-project"
+export CONTROL_PLANE_AUTH_TOKEN="<bearer-token>"
+
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode cloud_connected \
+  --policy-file examples/authorityd/policy.json \
+  --control-plane-enabled \
+  --control-plane-sync-enabled \
+  --control-plane-sync-project-id "$CONTROL_PLANE_PROJECT_ID" \
+  --control-plane-sync-environment "prod" \
+  --control-plane-sync-wait-timeout-s 15 \
+  --control-plane-sync-poll-interval-ms 200
+```
+
+Quick checks:
+
+```bash
+# daemon sync health counters
+curl -s http://127.0.0.1:8787/status | jq '.control_plane_sync_poll_count, .control_plane_sync_update_count, .control_plane_sync_error_count, .control_plane_last_sync_error'
+
+# daemon metrics includes control-plane sync counters
+curl -s http://127.0.0.1:8787/metrics | rg "predicate_authority_control_plane_sync_total"
+```
+
 ### Signing key safety note (required until mandate `v2` claims)
 
 Until mandate `v2` introduces explicit `iss`/`aud` claims and asymmetric signing defaults,

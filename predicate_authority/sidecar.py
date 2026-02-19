@@ -11,12 +11,14 @@ from predicate_authority.local_identity import LocalIdentityRegistry
 from predicate_authority.policy import PolicyEngine
 from predicate_authority.policy_source import PolicyFileSource
 from predicate_authority.proof import InMemoryProofLedger
+from predicate_authority.rate_limit import PrincipalRateLimiter, PrincipalRateLimiterConfig
 from predicate_authority.revocation import LocalRevocationCache
 from predicate_authority.sidecar_store import CredentialRecord, LocalCredentialStore
 from predicate_contracts import (
     ActionRequest,
     AuthorizationDecision,
     AuthorizationReason,
+    PolicyRule,
     PrincipalRef,
     StateEvidence,
     TraceEmitter,
@@ -32,6 +34,9 @@ class AuthorityMode(str, Enum):
 class SidecarConfig:
     mode: AuthorityMode = AuthorityMode.LOCAL_ONLY
     policy_file_path: str | None = None
+    principal_rate_limit_enabled: bool = True
+    principal_rate_limit_requests_per_second: float = 100.0
+    principal_rate_limit_burst_size: int = 100
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,15 @@ class SidecarStatus:
     local_flush_queue_flushed_count: int = 0
     local_flush_queue_failed_count: int = 0
     local_flush_queue_quarantined_count: int = 0
+    authorization_decision_total: int = 0
+    authorization_allow_total: int = 0
+    authorization_deny_total: int = 0
+    authorization_deny_no_matching_policy_total: int = 0
+    authorization_deny_explicit_deny_total: int = 0
+    authorization_deny_missing_required_verification_total: int = 0
+    authorization_deny_max_delegation_depth_total: int = 0
+    authorization_deny_invalid_mandate_total: int = 0
+    authorization_deny_rate_limit_exceeded_total: int = 0
 
 
 class SidecarError(RuntimeError):
@@ -98,8 +112,24 @@ class PredicateAuthoritySidecar:
             if config.policy_file_path is not None
             else None
         )
+        self._principal_rate_limiter = PrincipalRateLimiter(
+            config=PrincipalRateLimiterConfig(
+                enabled=config.principal_rate_limit_enabled,
+                requests_per_second=config.principal_rate_limit_requests_per_second,
+                burst_size=config.principal_rate_limit_burst_size,
+            )
+        )
 
     def issue_mandate(self, request: ActionRequest) -> AuthorizationDecision:
+        principal_limit = self._principal_rate_limiter.allow(request.principal.principal_id)
+        if not principal_limit.allowed:
+            decision = AuthorizationDecision(
+                allowed=False,
+                reason=AuthorizationReason.RATE_LIMIT_EXCEEDED,
+                violated_rule="principal_rate_limiter",
+            )
+            self._proof_ledger.record(decision, request)
+            return decision
         if self._revocation_cache.is_request_revoked(request):
             decision = AuthorizationDecision(
                 allowed=False,
@@ -167,8 +197,17 @@ class PredicateAuthoritySidecar:
             return True
         return False
 
+    def replace_policy(
+        self, rules: tuple[PolicyRule, ...], global_max_delegation_depth: int | None = None
+    ) -> None:
+        self._policy_engine.replace_policy(
+            rules=rules,
+            global_max_delegation_depth=global_max_delegation_depth,
+        )
+
     def status(self) -> SidecarStatus:
         trace_emitter = self._proof_ledger.trace_emitter
+        decision_stats = self._proof_ledger.decision_stats()
         control_plane_payload: dict[str, int | str | None] = {}
         control_plane_attached = False
         if isinstance(trace_emitter, ControlPlaneTraceEmitter):
@@ -213,6 +252,19 @@ class PredicateAuthoritySidecar:
             local_flush_queue_quarantined_count=(
                 local_stats.quarantined_queue_count if local_stats else 0
             ),
+            authorization_decision_total=decision_stats.total,
+            authorization_allow_total=decision_stats.allowed,
+            authorization_deny_total=decision_stats.denied,
+            authorization_deny_no_matching_policy_total=decision_stats.deny_no_matching_policy,
+            authorization_deny_explicit_deny_total=decision_stats.deny_explicit_deny,
+            authorization_deny_missing_required_verification_total=(
+                decision_stats.deny_missing_required_verification
+            ),
+            authorization_deny_max_delegation_depth_total=(
+                decision_stats.deny_max_delegation_depth
+            ),
+            authorization_deny_invalid_mandate_total=decision_stats.deny_invalid_mandate,
+            authorization_deny_rate_limit_exceeded_total=decision_stats.deny_rate_limit_exceeded,
         )
 
     def local_identity_registry(self) -> LocalIdentityRegistry | None:

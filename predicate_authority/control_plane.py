@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from predicate_contracts import ProofEvent
 
@@ -22,6 +22,11 @@ class ControlPlaneClientConfig:
     max_retries: int = 2
     backoff_initial_s: float = 0.2
     fail_open: bool = True
+    sync_enabled: bool = False
+    sync_wait_timeout_s: float = 15.0
+    sync_poll_interval_ms: int = 200
+    sync_project_id: str | None = None
+    sync_environment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,89 @@ class UsageCreditRecord:
         )
 
 
+@dataclass(frozen=True)
+class RemoteRevocation:
+    revocation_id: str
+    type: str
+    principal_id: str | None = None
+    intent_hash: str | None = None
+    tags: tuple[str, ...] = ()
+    reason: str | None = None
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class AuthoritySyncSnapshot:
+    changed: bool
+    sync_token: str
+    tenant_id: str
+    project_id: str | None = None
+    environment: str | None = None
+    policy_id: str | None = None
+    policy_revision: int | None = None
+    policy_document: dict[str, object] | None = None
+    revocations: tuple[RemoteRevocation, ...] = ()
+
+    @staticmethod
+    def from_payload(payload: Mapping[str, object]) -> AuthoritySyncSnapshot:
+        revocations_payload = payload.get("revocations")
+        parsed_revocations: list[RemoteRevocation] = []
+        if isinstance(revocations_payload, list):
+            for item in revocations_payload:
+                if not isinstance(item, Mapping):
+                    continue
+                raw_tags = item.get("tags")
+                tags: tuple[str, ...] = ()
+                if isinstance(raw_tags, list):
+                    tags = tuple(str(tag) for tag in raw_tags if isinstance(tag, str))
+                parsed_revocations.append(
+                    RemoteRevocation(
+                        revocation_id=str(item.get("revocation_id", "")),
+                        type=str(item.get("type", "")),
+                        principal_id=(
+                            str(item["principal_id"])
+                            if isinstance(item.get("principal_id"), str)
+                            else None
+                        ),
+                        intent_hash=(
+                            str(item["intent_hash"])
+                            if isinstance(item.get("intent_hash"), str)
+                            else None
+                        ),
+                        tags=tags,
+                        reason=str(item["reason"]) if isinstance(item.get("reason"), str) else None,
+                        created_at=str(item.get("created_at", "")),
+                    )
+                )
+        policy_document = payload.get("policy_document")
+        raw_policy_revision = payload.get("policy_revision")
+        policy_revision: int | None = None
+        if isinstance(raw_policy_revision, int):
+            policy_revision = raw_policy_revision
+        elif isinstance(raw_policy_revision, str) and raw_policy_revision.strip() != "":
+            try:
+                policy_revision = int(raw_policy_revision)
+            except ValueError:
+                policy_revision = None
+        return AuthoritySyncSnapshot(
+            changed=bool(payload.get("changed", False)),
+            sync_token=str(payload.get("sync_token", "")),
+            tenant_id=str(payload.get("tenant_id", "")),
+            project_id=(
+                str(payload["project_id"]) if isinstance(payload.get("project_id"), str) else None
+            ),
+            environment=(
+                str(payload["environment"]) if isinstance(payload.get("environment"), str) else None
+            ),
+            policy_id=(
+                str(payload["policy_id"]) if isinstance(payload.get("policy_id"), str) else None
+            ),
+            policy_revision=policy_revision,
+            policy_document=(dict(policy_document) if isinstance(policy_document, dict) else None),
+            revocations=tuple(parsed_revocations),
+        )
+
+
 class ControlPlaneClient:
     def __init__(self, config: ControlPlaneClientConfig) -> None:
         self.config = config
@@ -100,6 +188,29 @@ class ControlPlaneClient:
     def send_audit_payload(self, payload: Mapping[str, object]) -> bool:
         return self._post_json("/v1/audit/events:batch", payload)
 
+    def poll_authority_updates(
+        self,
+        current_token: str | None,
+        wait_timeout_s: float = 15.0,
+        poll_interval_ms: int = 200,
+        project_id: str | None = None,
+        environment: str | None = None,
+    ) -> AuthoritySyncSnapshot:
+        query: dict[str, str | float | int] = {
+            "tenant_id": self.config.tenant_id,
+            "wait_timeout_s": max(0.0, float(wait_timeout_s)),
+            "poll_interval_ms": max(50, int(poll_interval_ms)),
+        }
+        if current_token is not None and current_token.strip() != "":
+            query["current_token"] = current_token
+        if project_id is not None and project_id.strip() != "":
+            query["project_id"] = project_id
+        if environment is not None and environment.strip() != "":
+            query["environment"] = environment
+        path = "/v1/sync/authority-updates?" + urlencode(query)
+        payload = self._get_json(path)
+        return AuthoritySyncSnapshot.from_payload(payload)
+
     def _post_json(self, path: str, payload: Mapping[str, object]) -> bool:
         attempts = self.config.max_retries + 1
         for attempt in range(attempts):
@@ -114,6 +225,20 @@ class ControlPlaneClient:
                     raise RuntimeError(f"control-plane request failed: {path}") from exc
                 time.sleep(self.config.backoff_initial_s * (2**attempt))
         return False
+
+    def _get_json(self, path: str) -> Mapping[str, object]:
+        attempts = self.config.max_retries + 1
+        for attempt in range(attempts):
+            try:
+                return self._get_json_once(path)
+            except Exception as exc:
+                is_last_attempt = attempt == attempts - 1
+                if is_last_attempt:
+                    if self.config.fail_open:
+                        return {}
+                    raise RuntimeError(f"control-plane request failed: {path}") from exc
+                time.sleep(self.config.backoff_initial_s * (2**attempt))
+        return {}
 
     def _post_json_once(self, path: str, payload: Mapping[str, object]) -> None:
         target_path = path if path.startswith("/") else f"/{path}"
@@ -130,6 +255,25 @@ class ControlPlaneClient:
             connection.close()
         if response.status >= 400:
             raise RuntimeError(f"HTTP {response.status}: {content}")
+
+    def _get_json_once(self, path: str) -> Mapping[str, object]:
+        target_path = path if path.startswith("/") else f"/{path}"
+        connection = self._new_connection()
+        headers: dict[str, str] = {}
+        if self.config.auth_token:
+            headers["Authorization"] = f"Bearer {self.config.auth_token}"
+        try:
+            connection.request("GET", target_path, headers=headers)
+            response = connection.getresponse()
+            content = response.read().decode("utf-8")
+        finally:
+            connection.close()
+        if response.status >= 400:
+            raise RuntimeError(f"HTTP {response.status}: {content}")
+        loaded = json.loads(content) if content.strip() != "" else {}
+        if not isinstance(loaded, dict):
+            raise RuntimeError("Expected object JSON payload from control-plane GET response.")
+        return loaded
 
     def _new_connection(self) -> http.client.HTTPConnection:
         if self._base.scheme == "https":

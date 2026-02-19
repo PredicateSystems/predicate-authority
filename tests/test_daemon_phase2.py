@@ -116,6 +116,23 @@ def _post_json(url: str, body: dict[str, object] | None = None) -> dict[str, obj
     return loaded
 
 
+def _fetch_text(url: str) -> str:
+    parsed = urlsplit(url)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection = http.client.HTTPConnection(parsed.netloc, timeout=2.0)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        payload = response.read().decode("utf-8")
+    finally:
+        connection.close()
+    if response.status >= 400:
+        raise RuntimeError(f"HTTP {response.status}: {payload}")
+    return payload
+
+
 def test_daemon_exposes_health_and_status_endpoints(tmp_path: Path) -> None:
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
@@ -133,6 +150,52 @@ def test_daemon_exposes_health_and_status_endpoints(tmp_path: Path) -> None:
         assert health["mode"] == "local_only"
         assert status["daemon_running"] is True
         assert status["policy_hot_reload_enabled"] is True
+    finally:
+        daemon.stop()
+
+
+def test_daemon_exposes_prometheus_metrics_endpoint(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    sidecar = _build_sidecar(tmp_path, policy_file)
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=0.05),
+    )
+    daemon.start()
+    try:
+        request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:metrics"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="create order",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="metrics-state"),
+            verification_evidence=VerificationEvidence(),
+        )
+        decision = sidecar.issue_mandate(request)
+        assert decision.allowed is True
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        metrics = _fetch_text(f"{base_url}/metrics")
+        assert "predicate_authority_daemon_up 1" in metrics
+        assert 'predicate_authority_authz_decision_total{outcome="allow"} 1' in metrics
+        assert "predicate_authority_proof_event_total 1" in metrics
     finally:
         daemon.stop()
 
@@ -342,6 +405,79 @@ def _start_failing_control_plane_server() -> tuple[ThreadingHTTPServer, threadin
     return server, thread
 
 
+def _start_sync_control_plane_server() -> tuple[ThreadingHTTPServer, threading.Thread]:
+    class SyncHandler(BaseHTTPRequestHandler):
+        requests: list[str] = []
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urlsplit(self.path)
+            if parsed.path != "/v1/sync/authority-updates":
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"not_found"}')
+                return
+            self.requests.append(self.path)
+            query = parsed.query
+            changed = "current_token=sync-v1" not in query
+            payload = {
+                "changed": changed,
+                "sync_token": "sync-v1",
+                "tenant_id": "tenant-sync",
+                "project_id": "project-sync",
+                "environment": "prod",
+                "policy_id": "pol-sync-1",
+                "policy_revision": 1,
+                "policy_document": {
+                    "rules": [
+                        {
+                            "name": "allow-sync-http",
+                            "effect": "allow",
+                            "principals": ["agent:*"],
+                            "actions": ["http.*"],
+                            "resources": ["https://*/*"],
+                        }
+                    ]
+                },
+                "revocations": [
+                    {
+                        "revocation_id": "rev-sync-1",
+                        "tenant_id": "tenant-sync",
+                        "type": "principal",
+                        "principal_id": "agent:sync-revoked",
+                        "intent_hash": None,
+                        "tags": [],
+                        "reason": "incident",
+                        "created_at": "2026-02-19T00:00:00+00:00",
+                    }
+                ],
+            }
+            if not changed:
+                payload["revocations"] = []
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+        def do_POST(self) -> None:  # noqa: N802
+            raw_length = self.headers.get("Content-Length", "0")
+            content_length = int(raw_length) if raw_length.isdigit() else 0
+            _ = self.rfile.read(content_length) if content_length > 0 else b""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+            _ = fmt
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SyncHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
 def test_daemon_bootstrap_wires_control_plane_emitter(tmp_path: Path) -> None:
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
@@ -408,6 +544,81 @@ def test_daemon_bootstrap_wires_control_plane_emitter(tmp_path: Path) -> None:
         assert int(daemon_status["control_plane_usage_push_success_count"]) >= 1
         assert int(daemon_status["control_plane_audit_push_failure_count"]) == 0
         assert int(daemon_status["control_plane_usage_push_failure_count"]) == 0
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
+def test_daemon_long_poll_sync_applies_policy_and_revocations(tmp_path: Path) -> None:
+    server, _ = _start_sync_control_plane_server()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.CLOUD_CONNECTED,
+            policy_file=None,
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-sync",
+                project_id="project-sync",
+                auth_token="token-sync",
+                fail_open=False,
+                sync_enabled=True,
+                sync_wait_timeout_s=0.2,
+                sync_poll_interval_ms=50,
+                sync_project_id="project-sync",
+                sync_environment="prod",
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=1.0),
+        )
+        daemon.start()
+
+        status_url = f"http://127.0.0.1:{daemon.bound_port}/status"
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            status = _fetch_json(status_url)
+            if int(status["control_plane_sync_update_count"]) >= 1:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("control-plane sync update was not applied in time")
+
+        allowed_request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:sync-ok"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="sync path",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="sync-allow"),
+            verification_evidence=VerificationEvidence(),
+        )
+        allowed = sidecar.issue_mandate(allowed_request)
+        assert allowed.allowed is True
+
+        revoked_request = ActionRequest(
+            principal=PrincipalRef(principal_id="agent:sync-revoked"),
+            action_spec=ActionSpec(
+                action="http.post",
+                resource="https://api.vendor.com/orders",
+                intent="sync path revoked",
+            ),
+            state_evidence=StateEvidence(source="test", state_hash="sync-deny"),
+            verification_evidence=VerificationEvidence(),
+        )
+        denied = sidecar.issue_mandate(revoked_request)
+        assert denied.allowed is False
+        assert denied.reason.value == "invalid_mandate"
+
+        metrics = _fetch_text(f"http://127.0.0.1:{daemon.bound_port}/metrics")
+        assert 'predicate_authority_control_plane_sync_total{result="poll"}' in metrics
+        assert 'predicate_authority_control_plane_sync_total{result="update"} 1' in metrics
     finally:
         if daemon is not None:
             daemon.stop()
