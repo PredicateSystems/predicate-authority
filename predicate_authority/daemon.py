@@ -49,7 +49,18 @@ from predicate_authority.sidecar import (
     SidecarConfig,
 )
 from predicate_authority.sidecar_store import LocalCredentialStore
-from predicate_contracts import PolicyRule, TraceEmitter
+from predicate_contracts import (
+    ActionRequest,
+    ActionSpec,
+    AuthorizationDecision,
+    PolicyRule,
+    PrincipalRef,
+    StateEvidence,
+    TraceEmitter,
+    VerificationEvidence,
+    VerificationSignal,
+    VerificationStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -185,6 +196,8 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         handlers: dict[str, Any] = {
+            "/v1/authorize": self._handle_authorize,
+            "/authorize": self._handle_authorize,
             "/policy/reload": self._handle_policy_reload,
             "/revoke/principal": self._handle_revoke_principal,
             "/revoke/intent": self._handle_revoke_intent,
@@ -200,6 +213,137 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not_found"})
             return
         handler()
+
+    def _handle_authorize(self) -> None:
+        payload = self._read_json_body()
+        try:
+            request = self._build_action_request(payload)
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+        decision = self.server.daemon_ref.authorize_request(request)  # type: ignore[attr-defined]
+        response = {
+            "allowed": decision.allowed,
+            "reason": decision.reason.value,
+            "mandate_id": (
+                decision.mandate.claims.mandate_id if decision.mandate is not None else None
+            ),
+            "violated_rule": decision.violated_rule,
+            "missing_labels": list(decision.missing_labels),
+        }
+        self._send_json(200 if decision.allowed else 403, response)
+
+    def _build_action_request(self, payload: dict[str, Any]) -> ActionRequest:
+        principal_id = payload.get("principal")
+        if not isinstance(principal_id, str) or principal_id.strip() == "":
+            raise ValueError("principal is required")
+        action = payload.get("action")
+        if not isinstance(action, str) or action.strip() == "":
+            raise ValueError("action is required")
+        resource = payload.get("resource")
+        if not isinstance(resource, str) or resource.strip() == "":
+            raise ValueError("resource is required")
+
+        intent_hash = payload.get("intent_hash")
+        if isinstance(intent_hash, str) and intent_hash.strip() != "":
+            intent = intent_hash.strip()
+        else:
+            intent = f"{action.strip()}:{resource.strip()}"
+
+        context_raw = payload.get("context")
+        context = context_raw if isinstance(context_raw, dict) else {}
+        tenant_id = context.get("tenant_id")
+        session_id = context.get("session_id")
+        state = self._parse_state_evidence(payload=payload, context=context, intent=intent)
+        verification = self._parse_verification_evidence(payload=payload)
+
+        return ActionRequest(
+            principal=PrincipalRef(
+                principal_id=principal_id.strip(),
+                tenant_id=tenant_id if isinstance(tenant_id, str) else None,
+                session_id=session_id if isinstance(session_id, str) else None,
+            ),
+            action_spec=ActionSpec(
+                action=action.strip(),
+                resource=resource.strip(),
+                intent=intent,
+            ),
+            state_evidence=state,
+            verification_evidence=verification,
+        )
+
+    def _parse_state_evidence(
+        self,
+        payload: dict[str, Any],
+        context: dict[str, Any],
+        intent: str,
+    ) -> StateEvidence:
+        state_raw = payload.get("state_evidence")
+        if not isinstance(state_raw, dict):
+            state_raw = {}
+        source = state_raw.get("source")
+        state_hash = state_raw.get("state_hash")
+        schema_version = state_raw.get("schema_version")
+        confidence = state_raw.get("confidence")
+
+        source_value = (
+            source.strip() if isinstance(source, str) and source.strip() != "" else "external"
+        )
+        if isinstance(state_hash, str) and state_hash.strip() != "":
+            state_hash_value = state_hash.strip()
+        else:
+            context_state_hash = context.get("state_hash")
+            if isinstance(context_state_hash, str) and context_state_hash.strip() != "":
+                state_hash_value = context_state_hash.strip()
+            else:
+                state_hash_value = intent
+        schema_value = (
+            schema_version.strip()
+            if isinstance(schema_version, str) and schema_version.strip() != ""
+            else "v1"
+        )
+        confidence_value = float(confidence) if isinstance(confidence, (float, int)) else None
+        return StateEvidence(
+            source=source_value,
+            state_hash=state_hash_value,
+            schema_version=schema_value,
+            confidence=confidence_value,
+        )
+
+    def _parse_verification_evidence(self, payload: dict[str, Any]) -> VerificationEvidence:
+        verification_raw = payload.get("verification_evidence")
+        if not isinstance(verification_raw, dict):
+            return VerificationEvidence()
+        signals_raw = verification_raw.get("signals")
+        if not isinstance(signals_raw, list):
+            return VerificationEvidence()
+        parsed_signals: list[VerificationSignal] = []
+        for item in signals_raw:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("label")
+            status = item.get("status")
+            if not isinstance(label, str) or label.strip() == "":
+                continue
+            if not isinstance(status, str):
+                continue
+            try:
+                parsed_status = VerificationStatus(status.strip())
+            except ValueError:
+                continue
+            required_raw = item.get("required")
+            required = bool(required_raw) if isinstance(required_raw, bool) else True
+            reason_raw = item.get("reason")
+            reason = reason_raw if isinstance(reason_raw, str) else None
+            parsed_signals.append(
+                VerificationSignal(
+                    label=label.strip(),
+                    status=parsed_status,
+                    required=required,
+                    reason=reason,
+                )
+            )
+        return VerificationEvidence(signals=tuple(parsed_signals))
 
     def _handle_policy_reload(self) -> None:
         reloaded = self.server.daemon_ref.reload_policy_now()  # type: ignore[attr-defined]
@@ -446,6 +590,9 @@ class PredicateAuthorityDaemon:
 
     def max_request_body_bytes(self) -> int:
         return max(0, int(self._config.max_request_body_bytes))
+
+    def authorize_request(self, request: ActionRequest) -> AuthorizationDecision:
+        return self._sidecar.issue_mandate(request)
 
     def issue_task_identity(
         self,

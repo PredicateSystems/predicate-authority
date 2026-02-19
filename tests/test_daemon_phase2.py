@@ -116,6 +116,24 @@ def _post_json(url: str, body: dict[str, object] | None = None) -> dict[str, obj
     return loaded
 
 
+def _post_json_with_status(
+    url: str, body: dict[str, object] | None = None
+) -> tuple[int, dict[str, object]]:
+    parsed = urlsplit(url)
+    path = parsed.path or "/"
+    payload = json.dumps(body or {})
+    connection = http.client.HTTPConnection(parsed.netloc, timeout=2.0)
+    try:
+        connection.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        content = response.read().decode("utf-8")
+        loaded = json.loads(content) if content else {}
+    finally:
+        connection.close()
+    assert isinstance(loaded, dict)
+    return int(response.status), loaded
+
+
 def _fetch_text(url: str) -> str:
     parsed = urlsplit(url)
     path = parsed.path or "/"
@@ -306,6 +324,119 @@ def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> N
         assert int(status["revoked_principal_count"]) >= 1
         assert int(status["revoked_intent_count"]) >= 1
         assert int(status["revoked_mandate_count"]) >= 1
+    finally:
+        daemon.stop()
+
+
+def test_daemon_authorize_endpoint_allows_and_returns_mandate_metadata(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    sidecar = _build_sidecar(tmp_path, policy_file)
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+    )
+    daemon.start()
+    try:
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        status_code, payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:test",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "intent-hash-123",
+                "context": {"tenant_id": "tenant-a", "session_id": "session-a"},
+                "state_evidence": {"source": "test", "state_hash": "state-1"},
+            },
+        )
+        assert status_code == 200
+        assert payload["allowed"] is True
+        assert payload["reason"] == "allowed"
+        assert isinstance(payload.get("mandate_id"), str)
+        assert payload.get("missing_labels") == []
+    finally:
+        daemon.stop()
+
+
+def test_daemon_authorize_endpoint_denies_with_403(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-only-orders",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.post"],
+                        "resources": ["https://api.vendor.com/orders"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    sidecar = _build_sidecar(tmp_path, policy_file)
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+    )
+    daemon.start()
+    try:
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        status_code, payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:test",
+                "action": "http.delete",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "intent-hash-123",
+                "state_evidence": {"source": "test", "state_hash": "state-1"},
+            },
+        )
+        assert status_code == 403
+        assert payload["allowed"] is False
+        assert payload["reason"] == "no_matching_policy"
+    finally:
+        daemon.stop()
+
+
+def test_daemon_authorize_endpoint_validates_required_fields(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
+    sidecar = _build_sidecar(tmp_path, policy_file)
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+    )
+    daemon.start()
+    try:
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        status_code, payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+            },
+        )
+        assert status_code == 400
+        assert payload["error"] == "principal is required"
     finally:
         daemon.stop()
 
