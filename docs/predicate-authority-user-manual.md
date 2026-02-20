@@ -481,6 +481,97 @@ Operational notes:
 
 ---
 
+## Sidecar enrollment and fleet sync (control-plane)
+
+Use this flow when you run many sidecars (for example OpenClaw bot fleets) and
+want:
+
+- short-lived sidecar identity tokens,
+- control-plane fleet visibility,
+- low-latency revocation push (SSE) for kill-switch scenarios.
+
+### 1) Configure enrollment keys on control-plane
+
+Set per-tenant enrollment keys and token TTL:
+
+```bash
+export SIDECAR_ENROLLMENT_KEYS_JSON='{"tenant-a":"replace-with-strong-enroll-key"}'
+export SIDECAR_TOKEN_TTL_SECONDS=3600
+```
+
+### 2) Enroll sidecar to get a short-lived token
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/v1/sidecars/enroll" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id":"tenant-a",
+    "sidecar_id":"sidecar-openclaw-01",
+    "version":"1.0.0",
+    "api_key":"replace-with-strong-enroll-key"
+  }' | jq
+```
+
+Expected response fields:
+
+- `sidecar_token`: bearer token for sidecar-authenticated sync endpoints,
+- `expires_at`: token expiry,
+- `sidecar`: sidecar metadata (id/version/last_seen/active).
+
+### 3) Send periodic heartbeat
+
+Heartbeat keeps liveness/version current for fleet operations:
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/v1/sidecars/heartbeat" \
+  -H "Authorization: Bearer $SIDECAR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"version":"1.0.1"}' | jq
+```
+
+Recommended cadence: every 15-30 seconds.
+
+### 4) Sidecar sync pull (long-poll)
+
+Use sidecar token with the sidecar sync endpoint:
+
+```bash
+curl -s "http://127.0.0.1:8080/v1/sync/authority-updates/sidecar?tenant_id=tenant-a&wait_timeout_s=15" \
+  -H "Authorization: Bearer $SIDECAR_TOKEN" | jq
+```
+
+This returns policy + revocation snapshot and a `sync_token`.
+
+### 5) Revocation push stream (SSE)
+
+Subscribe for near-real-time revocation events:
+
+```bash
+curl -N "http://127.0.0.1:8080/v1/sync/authority-updates/stream?tenant_id=tenant-a&last_event_id=0" \
+  -H "Authorization: Bearer $SIDECAR_TOKEN"
+```
+
+When operators call revocation endpoints (including global kill-switch style
+revocations), stream events are pushed with `event: revocation`.
+
+### 6) Fleet visibility endpoint (operator/command center)
+
+```bash
+curl -s "http://127.0.0.1:8080/v1/sidecars?tenant_id=tenant-a&active_only=true" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+Use this to track active sidecar count, versions, and last-seen status.
+
+### Failure handling guidance
+
+- if SSE connection drops, reconnect and pass the last processed `event_id`,
+- if sidecar token expires, re-enroll and rotate token in sidecar runtime,
+- if control-plane is unreachable, continue local fail-closed guard behavior and
+  retry sync/stream with backoff.
+
+---
+
 ## `sdk-python` integration example (boundary adapter flow)
 
 If your web agent uses `sdk-python`, build shared contract evidence before
