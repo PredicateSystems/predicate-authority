@@ -370,11 +370,23 @@ class _DaemonRequestHandler(BaseHTTPRequestHandler):
     def _handle_revoke_mandate(self) -> None:
         payload = self._read_json_body()
         mandate_id = payload.get("mandate_id")
+        cascade_raw = payload.get("cascade")
+        cascade = bool(cascade_raw) if isinstance(cascade_raw, bool) else False
         if not isinstance(mandate_id, str) or mandate_id.strip() == "":
             self._send_json(400, {"error": "mandate_id is required"})
             return
-        self.server.daemon_ref.revoke_mandate(mandate_id.strip())  # type: ignore[attr-defined]
-        self._send_json(200, {"ok": True, "mandate_id": mandate_id.strip()})
+        revoked_count = self.server.daemon_ref.revoke_mandate(  # type: ignore[attr-defined]
+            mandate_id.strip(), cascade=cascade
+        )
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "mandate_id": mandate_id.strip(),
+                "cascade": cascade,
+                "revoked_count": int(revoked_count),
+            },
+        )
 
     def _handle_identity_task(self) -> None:
         payload = self._read_json_body()
@@ -585,8 +597,8 @@ class PredicateAuthorityDaemon:
     def revoke_intent(self, intent_hash: str) -> None:
         self._sidecar.revoke_intent_hash(intent_hash)
 
-    def revoke_mandate(self, mandate_id: str) -> None:
-        self._sidecar.revoke_mandate_id(mandate_id)
+    def revoke_mandate(self, mandate_id: str, cascade: bool = False) -> int:
+        return self._sidecar.revoke_mandate_id(mandate_id, cascade=cascade)
 
     def max_request_body_bytes(self) -> int:
         return max(0, int(self._config.max_request_body_bytes))
@@ -826,15 +838,16 @@ class PredicateAuthorityDaemon:
             elif item.type == "intent" and item.intent_hash is not None:
                 self._sidecar.revoke_intent_hash(item.intent_hash)
             elif item.type == "tags":
-                # Tag revocation support is modeled in control-plane API but not yet represented in
-                # sidecar's revocation cache keys.
-                continue
+                tags = {tag.strip().lower() for tag in item.tags if tag.strip() != ""}
+                if "global_kill_switch" in tags:
+                    self._sidecar.activate_global_kill_switch()
 
 
 def _build_default_sidecar(
     mode: AuthorityMode,
     policy_file: str | None,
     credential_store_file: str,
+    mandate_store_file: str | None = None,
     control_plane_config: ControlPlaneBootstrapConfig | None = None,
     local_identity_config: LocalIdentityBootstrapConfig | None = None,
     identity_bridge: ExchangeTokenBridge | None = None,
@@ -912,7 +925,7 @@ def _build_default_sidecar(
         proof_ledger=proof_ledger,
         identity_bridge=identity_bridge or IdentityBridge(),
         credential_store=LocalCredentialStore(credential_store_file),
-        revocation_cache=LocalRevocationCache(),
+        revocation_cache=LocalRevocationCache(store_file_path=mandate_store_file),
         policy_engine=policy_engine,
         local_identity_registry=local_identity_registry,
     )
@@ -1069,6 +1082,14 @@ def main() -> None:
     parser.add_argument(
         "--credential-store-file",
         default=str(Path.home() / ".predicate-authorityd" / "credentials.json"),
+    )
+    parser.add_argument(
+        "--mandate-store-file",
+        default=None,
+        help=(
+            "Optional path for persisted local revocation/mandate cache. "
+            "If omitted, mandate cache remains in-memory (ephemeral default)."
+        ),
     )
     parser.add_argument(
         "--local-identity-enabled",
@@ -1307,6 +1328,7 @@ def main() -> None:
         mode=mode,
         policy_file=args.policy_file,
         credential_store_file=args.credential_store_file,
+        mandate_store_file=args.mandate_store_file,
         control_plane_config=control_plane_bootstrap,
         local_identity_config=local_identity_bootstrap,
         identity_bridge=identity_bridge,

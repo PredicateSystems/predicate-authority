@@ -168,6 +168,29 @@ def test_daemon_exposes_health_and_status_endpoints(tmp_path: Path) -> None:
         assert health["mode"] == "local_only"
         assert status["daemon_running"] is True
         assert status["policy_hot_reload_enabled"] is True
+        assert status["mandate_store_persistence_enabled"] is False
+    finally:
+        daemon.stop()
+
+
+def test_daemon_status_exposes_mandate_store_persistence_mode(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
+    sidecar = _build_default_sidecar(
+        mode=AuthorityMode.LOCAL_ONLY,
+        policy_file=str(policy_file),
+        credential_store_file=str(tmp_path / "credentials.json"),
+        mandate_store_file=str(tmp_path / "mandates.json"),
+    )
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=0.05),
+    )
+    daemon.start()
+    try:
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        status = _fetch_json(f"{base_url}/status")
+        assert status["mandate_store_persistence_enabled"] is True
     finally:
         daemon.stop()
 
@@ -321,6 +344,8 @@ def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> N
         assert revoke_principal["ok"] is True
         assert revoke_intent["ok"] is True
         assert revoke_mandate["ok"] is True
+        assert revoke_mandate["cascade"] is False
+        assert int(revoke_mandate["revoked_count"]) >= 1
         assert int(status["revoked_principal_count"]) >= 1
         assert int(status["revoked_intent_count"]) >= 1
         assert int(status["revoked_mandate_count"]) >= 1
@@ -750,6 +775,128 @@ def test_daemon_long_poll_sync_applies_policy_and_revocations(tmp_path: Path) ->
         metrics = _fetch_text(f"http://127.0.0.1:{daemon.bound_port}/metrics")
         assert 'predicate_authority_control_plane_sync_total{result="poll"}' in metrics
         assert 'predicate_authority_control_plane_sync_total{result="update"} 1' in metrics
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
+def test_daemon_long_poll_sync_applies_global_kill_switch_tags(tmp_path: Path) -> None:
+    class SyncKillSwitchHandler(BaseHTTPRequestHandler):
+        requests: list[str] = []
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urlsplit(self.path)
+            if parsed.path != "/v1/sync/authority-updates":
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"not_found"}')
+                return
+            self.requests.append(self.path)
+            payload = {
+                "changed": True,
+                "sync_token": "sync-kill-1",
+                "tenant_id": "tenant-sync",
+                "project_id": "project-sync",
+                "environment": "prod",
+                "policy_id": "pol-sync-1",
+                "policy_revision": 1,
+                "policy_document": {
+                    "rules": [
+                        {
+                            "name": "allow-sync-http",
+                            "effect": "allow",
+                            "principals": ["agent:*"],
+                            "actions": ["http.*"],
+                            "resources": ["https://*/*"],
+                        }
+                    ]
+                },
+                "revocations": [
+                    {
+                        "revocation_id": "rev-kill-1",
+                        "tenant_id": "tenant-sync",
+                        "type": "tags",
+                        "principal_id": None,
+                        "intent_hash": None,
+                        "tags": ["global_kill_switch"],
+                        "reason": "incident",
+                        "created_at": "2026-02-19T00:00:00+00:00",
+                    }
+                ],
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+        def do_POST(self) -> None:  # noqa: N802
+            raw_length = self.headers.get("Content-Length", "0")
+            content_length = int(raw_length) if raw_length.isdigit() else 0
+            _ = self.rfile.read(content_length) if content_length > 0 else b""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+            _ = fmt
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SyncKillSwitchHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.CLOUD_CONNECTED,
+            policy_file=None,
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-sync",
+                project_id="project-sync",
+                auth_token="token-sync",
+                fail_open=False,
+                sync_enabled=True,
+                sync_wait_timeout_s=0.2,
+                sync_poll_interval_ms=50,
+                sync_project_id="project-sync",
+                sync_environment="prod",
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=1.0),
+        )
+        daemon.start()
+        status_url = f"http://127.0.0.1:{daemon.bound_port}/status"
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            status = _fetch_json(status_url)
+            if status.get("global_kill_switch_enabled") is True:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("global kill-switch tag was not applied in time")
+
+        denied = sidecar.issue_mandate(
+            ActionRequest(
+                principal=PrincipalRef(principal_id="agent:any"),
+                action_spec=ActionSpec(
+                    action="http.post",
+                    resource="https://api.vendor.com/orders",
+                    intent="sync path",
+                ),
+                state_evidence=StateEvidence(source="test", state_hash="sync-kill"),
+                verification_evidence=VerificationEvidence(),
+            )
+        )
+        assert denied.allowed is False
+        assert denied.reason.value == "invalid_mandate"
     finally:
         if daemon is not None:
             daemon.stop()
@@ -1420,3 +1567,157 @@ def test_daemon_restart_recovers_queue_after_partition(tmp_path: Path) -> None:
             daemon_after_restart.stop()
         healthy_server.shutdown()
         healthy_server.server_close()
+
+
+def test_daemon_restart_recovers_revocations_when_mandate_store_enabled(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    mandate_store_file = tmp_path / "mandates.json"
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            mandate_store_file=str(mandate_store_file),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon.start()
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        pre_revoke_status, pre_revoke_payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:persisted-revoke",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "persisted-revocation",
+                "state_evidence": {"source": "test", "state_hash": "persisted-state"},
+            },
+        )
+        assert pre_revoke_status == 200
+        assert pre_revoke_payload["allowed"] is True
+        revoke_response = _post_json(
+            f"{base_url}/revoke/principal", {"principal_id": "agent:persisted-revoke"}
+        )
+        assert revoke_response["ok"] is True
+    finally:
+        if daemon is not None:
+            daemon.stop()
+
+    daemon_after_restart: PredicateAuthorityDaemon | None = None
+    try:
+        restarted_sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            mandate_store_file=str(mandate_store_file),
+        )
+        daemon_after_restart = PredicateAuthorityDaemon(
+            sidecar=restarted_sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon_after_restart.start()
+        base_url = f"http://127.0.0.1:{daemon_after_restart.bound_port}"
+        post_revoke_status, post_revoke_payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:persisted-revoke",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "persisted-revocation",
+                "state_evidence": {"source": "test", "state_hash": "persisted-state"},
+            },
+        )
+        assert post_revoke_status == 403
+        assert post_revoke_payload["allowed"] is False
+        assert post_revoke_payload["reason"] == "invalid_mandate"
+    finally:
+        if daemon_after_restart is not None:
+            daemon_after_restart.stop()
+
+
+def test_daemon_restart_drops_revocations_when_mandate_store_disabled(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon.start()
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        revoke_response = _post_json(
+            f"{base_url}/revoke/principal", {"principal_id": "agent:ephemeral-revoke"}
+        )
+        assert revoke_response["ok"] is True
+    finally:
+        if daemon is not None:
+            daemon.stop()
+
+    daemon_after_restart: PredicateAuthorityDaemon | None = None
+    try:
+        restarted_sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+        )
+        daemon_after_restart = PredicateAuthorityDaemon(
+            sidecar=restarted_sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon_after_restart.start()
+        base_url = f"http://127.0.0.1:{daemon_after_restart.bound_port}"
+        post_restart_status, post_restart_payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:ephemeral-revoke",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "ephemeral-revocation",
+                "state_evidence": {"source": "test", "state_hash": "ephemeral-state"},
+            },
+        )
+        assert post_restart_status == 200
+        assert post_restart_payload["allowed"] is True
+    finally:
+        if daemon_after_restart is not None:
+            daemon_after_restart.stop()

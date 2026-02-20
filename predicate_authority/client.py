@@ -113,12 +113,15 @@ class AuthorityClient:
                 reason=AuthorizationReason.INVALID_MANDATE,
                 violated_rule="revocation_cache",
             )
+        if decision.allowed and decision.mandate is not None:
+            self._revocation_cache.register_mandate(decision.mandate)
         return decision
 
     def verify_token(self, token: str) -> SignedMandate | None:
         mandate = self._mandate_signer.verify(token)
         if mandate is None:
             return None
+        self._revocation_cache.register_mandate(mandate)
         if self._revocation_cache.is_mandate_revoked(mandate):
             return None
         return mandate
@@ -142,5 +145,5 @@ class AuthorityClient:
     def revoke_principal(self, principal_id: str) -> None:
         self._revocation_cache.revoke_principal(principal_id)
 
-    def revoke_mandate(self, mandate_id: str) -> None:
-        self._revocation_cache.revoke_mandate_id(mandate_id)
+    def revoke_mandate(self, mandate_id: str, cascade: bool = False) -> int:
+        return self._revocation_cache.revoke_mandate_id(mandate_id, cascade=cascade)

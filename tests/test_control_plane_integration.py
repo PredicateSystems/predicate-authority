@@ -102,6 +102,9 @@ def test_control_plane_client_posts_audit_and_usage() -> None:
         assert any(
             headers.get("Authorization") == "Bearer token-123" for headers in recorder.headers
         )
+        assert all("X-PA-Nonce" in headers for headers in recorder.headers)
+        assert all("X-PA-Timestamp" in headers for headers in recorder.headers)
+        assert all("X-PA-Idempotency-Token" in headers for headers in recorder.headers)
     finally:
         server.shutdown()
         server.server_close()
@@ -137,6 +140,42 @@ def test_control_plane_trace_emitter_sends_from_proof_event() -> None:
         events_payload = recorder.payloads[0]["events"]
         assert isinstance(events_payload, list)
         assert events_payload[0]["tenant_id"] == "tenant-z"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_control_plane_client_includes_replay_signature_when_configured() -> None:
+    recorder = Recorder()
+    server, _ = _start_server(recorder)
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        client = ControlPlaneClient(
+            ControlPlaneClientConfig(
+                base_url=base_url,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                replay_signing_secret="test-replay-secret",
+                fail_open=False,
+            )
+        )
+        sent = client.send_audit_events(
+            (
+                AuditEventEnvelope(
+                    event_id="evt_1",
+                    tenant_id="tenant-a",
+                    principal_id="agent:orders-1",
+                    action="http.post",
+                    resource="https://api.vendor.com/orders",
+                    allowed=True,
+                    reason="allowed",
+                    timestamp="2026-01-01T00:00:00+00:00",
+                ),
+            )
+        )
+        assert sent is True
+        assert len(recorder.headers) == 1
+        assert "X-PA-Signature" in recorder.headers[0]
     finally:
         server.shutdown()
         server.server_close()
