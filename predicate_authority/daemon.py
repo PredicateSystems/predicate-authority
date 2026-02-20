@@ -838,9 +838,9 @@ class PredicateAuthorityDaemon:
             elif item.type == "intent" and item.intent_hash is not None:
                 self._sidecar.revoke_intent_hash(item.intent_hash)
             elif item.type == "tags":
-                # Tag revocation support is modeled in control-plane API but not yet represented in
-                # sidecar's revocation cache keys.
-                continue
+                tags = {tag.strip().lower() for tag in item.tags if tag.strip() != ""}
+                if "global_kill_switch" in tags:
+                    self._sidecar.activate_global_kill_switch()
 
 
 def _build_default_sidecar(

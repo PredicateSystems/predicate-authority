@@ -21,6 +21,7 @@ class LocalRevocationCache:
         self._revoked_principal_ids: set[str] = set()
         self._revoked_intent_hashes: set[str] = set()
         self._revoked_mandate_ids: set[str] = set()
+        self._global_kill_switch_enabled = False
         self._mandate_parent_by_id: dict[str, str] = {}
         self._mandate_children_by_id: dict[str, set[str]] = {}
         self._lock = Lock()
@@ -58,6 +59,10 @@ class LocalRevocationCache:
     def persistence_enabled(self) -> bool:
         return self._store_file_path is not None
 
+    def global_kill_switch_enabled(self) -> bool:
+        with self._lock:
+            return self._global_kill_switch_enabled
+
     def revoke_principal(self, principal_id: str) -> None:
         with self._lock:
             self._revoked_principal_ids.add(principal_id)
@@ -77,6 +82,11 @@ class LocalRevocationCache:
             self._persist_unlocked()
             return revoked_count
 
+    def enable_global_kill_switch(self) -> None:
+        with self._lock:
+            self._global_kill_switch_enabled = True
+            self._persist_unlocked()
+
     def register_mandate(self, mandate: SignedMandate) -> None:
         with self._lock:
             mandate_id = mandate.claims.mandate_id
@@ -91,6 +101,8 @@ class LocalRevocationCache:
 
     def is_request_revoked(self, request: ActionRequest) -> bool:
         with self._lock:
+            if self._global_kill_switch_enabled:
+                return True
             if request.principal.principal_id in self._revoked_principal_ids:
                 return True
             intent_hash = hashlib.sha256(request.action_spec.intent.encode("utf-8")).hexdigest()
@@ -98,6 +110,8 @@ class LocalRevocationCache:
 
     def is_mandate_revoked(self, mandate: SignedMandate) -> bool:
         with self._lock:
+            if self._global_kill_switch_enabled:
+                return True
             if mandate.claims.principal_id in self._revoked_principal_ids:
                 return True
             if mandate.claims.intent_hash in self._revoked_intent_hashes:
@@ -140,6 +154,7 @@ class LocalRevocationCache:
         self._revoked_principal_ids = self._parse_string_set(loaded.get("revoked_principal_ids"))
         self._revoked_intent_hashes = self._parse_string_set(loaded.get("revoked_intent_hashes"))
         self._revoked_mandate_ids = self._parse_string_set(loaded.get("revoked_mandate_ids"))
+        self._global_kill_switch_enabled = bool(loaded.get("global_kill_switch_enabled", False))
         self._mandate_parent_by_id = self._parse_string_map(loaded.get("mandate_parent_by_id"))
         self._mandate_children_by_id = self._parse_children_map(
             loaded.get("mandate_children_by_id")
@@ -153,6 +168,7 @@ class LocalRevocationCache:
             "revoked_principal_ids": sorted(self._revoked_principal_ids),
             "revoked_intent_hashes": sorted(self._revoked_intent_hashes),
             "revoked_mandate_ids": sorted(self._revoked_mandate_ids),
+            "global_kill_switch_enabled": self._global_kill_switch_enabled,
             "mandate_parent_by_id": dict(sorted(self._mandate_parent_by_id.items())),
             "mandate_children_by_id": {
                 parent_id: sorted(children)
@@ -200,6 +216,7 @@ class LocalRevocationCache:
             "revoked_principal_ids": [],
             "revoked_intent_hashes": [],
             "revoked_mandate_ids": [],
+            "global_kill_switch_enabled": False,
             "mandate_parent_by_id": {},
             "mandate_children_by_id": {},
         }

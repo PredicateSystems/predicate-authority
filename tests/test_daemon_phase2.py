@@ -782,6 +782,128 @@ def test_daemon_long_poll_sync_applies_policy_and_revocations(tmp_path: Path) ->
         server.server_close()
 
 
+def test_daemon_long_poll_sync_applies_global_kill_switch_tags(tmp_path: Path) -> None:
+    class SyncKillSwitchHandler(BaseHTTPRequestHandler):
+        requests: list[str] = []
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urlsplit(self.path)
+            if parsed.path != "/v1/sync/authority-updates":
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"not_found"}')
+                return
+            self.requests.append(self.path)
+            payload = {
+                "changed": True,
+                "sync_token": "sync-kill-1",
+                "tenant_id": "tenant-sync",
+                "project_id": "project-sync",
+                "environment": "prod",
+                "policy_id": "pol-sync-1",
+                "policy_revision": 1,
+                "policy_document": {
+                    "rules": [
+                        {
+                            "name": "allow-sync-http",
+                            "effect": "allow",
+                            "principals": ["agent:*"],
+                            "actions": ["http.*"],
+                            "resources": ["https://*/*"],
+                        }
+                    ]
+                },
+                "revocations": [
+                    {
+                        "revocation_id": "rev-kill-1",
+                        "tenant_id": "tenant-sync",
+                        "type": "tags",
+                        "principal_id": None,
+                        "intent_hash": None,
+                        "tags": ["global_kill_switch"],
+                        "reason": "incident",
+                        "created_at": "2026-02-19T00:00:00+00:00",
+                    }
+                ],
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+        def do_POST(self) -> None:  # noqa: N802
+            raw_length = self.headers.get("Content-Length", "0")
+            content_length = int(raw_length) if raw_length.isdigit() else 0
+            _ = self.rfile.read(content_length) if content_length > 0 else b""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+            _ = fmt
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SyncKillSwitchHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.CLOUD_CONNECTED,
+            policy_file=None,
+            credential_store_file=str(tmp_path / "credentials.json"),
+            control_plane_config=ControlPlaneBootstrapConfig(
+                enabled=True,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                tenant_id="tenant-sync",
+                project_id="project-sync",
+                auth_token="token-sync",
+                fail_open=False,
+                sync_enabled=True,
+                sync_wait_timeout_s=0.2,
+                sync_poll_interval_ms=50,
+                sync_project_id="project-sync",
+                sync_environment="prod",
+            ),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=1.0),
+        )
+        daemon.start()
+        status_url = f"http://127.0.0.1:{daemon.bound_port}/status"
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            status = _fetch_json(status_url)
+            if status.get("global_kill_switch_enabled") is True:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("global kill-switch tag was not applied in time")
+
+        denied = sidecar.issue_mandate(
+            ActionRequest(
+                principal=PrincipalRef(principal_id="agent:any"),
+                action_spec=ActionSpec(
+                    action="http.post",
+                    resource="https://api.vendor.com/orders",
+                    intent="sync path",
+                ),
+                state_evidence=StateEvidence(source="test", state_hash="sync-kill"),
+                verification_evidence=VerificationEvidence(),
+            )
+        )
+        assert denied.allowed is False
+        assert denied.reason.value == "invalid_mandate"
+    finally:
+        if daemon is not None:
+            daemon.stop()
+        server.shutdown()
+        server.server_close()
+
+
 def test_daemon_identity_mode_local_idp_builder() -> None:
     os.environ["LOCAL_IDP_SIGNING_KEY"] = "daemon-local-idp-key"
     args = Namespace(

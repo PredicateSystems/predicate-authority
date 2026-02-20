@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import http.client
 import json
 import time
@@ -27,6 +28,7 @@ class ControlPlaneClientConfig:
     sync_poll_interval_ms: int = 200
     sync_project_id: str | None = None
     sync_environment: str | None = None
+    replay_signing_secret: str | None = None
 
 
 @dataclass(frozen=True)
@@ -212,10 +214,11 @@ class ControlPlaneClient:
         return AuthoritySyncSnapshot.from_payload(payload)
 
     def _post_json(self, path: str, payload: Mapping[str, object]) -> bool:
+        replay_headers = self._build_replay_headers(path)
         attempts = self.config.max_retries + 1
         for attempt in range(attempts):
             try:
-                self._post_json_once(path, payload)
+                self._post_json_once(path, payload, replay_headers=replay_headers)
                 return True
             except Exception as exc:
                 is_last_attempt = attempt == attempts - 1
@@ -240,12 +243,19 @@ class ControlPlaneClient:
                 time.sleep(self.config.backoff_initial_s * (2**attempt))
         return {}
 
-    def _post_json_once(self, path: str, payload: Mapping[str, object]) -> None:
+    def _post_json_once(
+        self,
+        path: str,
+        payload: Mapping[str, object],
+        *,
+        replay_headers: Mapping[str, str],
+    ) -> None:
         target_path = path if path.startswith("/") else f"/{path}"
         connection = self._new_connection()
         headers = {"Content-Type": "application/json"}
         if self.config.auth_token:
             headers["Authorization"] = f"Bearer {self.config.auth_token}"
+        headers.update(replay_headers)
         body = json.dumps(payload)
         try:
             connection.request("POST", target_path, body=body, headers=headers)
@@ -279,6 +289,26 @@ class ControlPlaneClient:
         if self._base.scheme == "https":
             return http.client.HTTPSConnection(self._base.netloc, timeout=self.config.timeout_s)
         return http.client.HTTPConnection(self._base.netloc, timeout=self.config.timeout_s)
+
+    def _build_replay_headers(self, path: str) -> dict[str, str]:
+        timestamp = str(int(time.time()))
+        nonce = hashlib.sha256(
+            f"{self.config.tenant_id}|{path}|{time.time_ns()}".encode()
+        ).hexdigest()[:32]
+        headers = {
+            "X-PA-Nonce": nonce,
+            "X-PA-Timestamp": timestamp,
+            "X-PA-Idempotency-Token": hashlib.sha256(
+                f"{nonce}|{timestamp}|{path}".encode()
+            ).hexdigest()[:32],
+        }
+        if self.config.replay_signing_secret is not None:
+            message = f"{nonce}:{timestamp}:POST:{path}".encode()
+            signature = hmac.new(
+                self.config.replay_signing_secret.encode("utf-8"), message, hashlib.sha256
+            ).hexdigest()
+            headers["X-PA-Signature"] = signature
+        return headers
 
 
 @dataclass

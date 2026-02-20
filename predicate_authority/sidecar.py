@@ -44,6 +44,7 @@ class SidecarStatus:
     mode: AuthorityMode
     policy_hot_reload_enabled: bool
     mandate_store_persistence_enabled: bool
+    global_kill_switch_enabled: bool
     revoked_principal_count: int
     revoked_intent_count: int
     revoked_mandate_count: int
@@ -187,6 +188,9 @@ class PredicateAuthoritySidecar:
     def revoke_mandate_id(self, mandate_id: str, cascade: bool = False) -> int:
         return self._revocation_cache.revoke_mandate_id(mandate_id, cascade=cascade)
 
+    def activate_global_kill_switch(self) -> None:
+        self._revocation_cache.enable_global_kill_switch()
+
     def hot_reload_policy(self) -> bool:
         if self._policy_source is None:
             return False
@@ -222,6 +226,7 @@ class PredicateAuthoritySidecar:
             mode=self._config.mode,
             policy_hot_reload_enabled=self._policy_source is not None,
             mandate_store_persistence_enabled=self._revocation_cache.persistence_enabled(),
+            global_kill_switch_enabled=self._revocation_cache.global_kill_switch_enabled(),
             revoked_principal_count=self._revocation_cache.revoked_principal_count(),
             revoked_intent_count=self._revocation_cache.revoked_intent_count(),
             revoked_mandate_count=self._revocation_cache.revoked_mandate_count(),
