@@ -43,6 +43,23 @@ PYTHONPATH=. predicate-authorityd \
   --credential-store-file ./.predicate-authorityd/credentials.json
 ```
 
+By design, mandate/revocation cache is in-memory (ephemeral) unless you explicitly
+enable persistence with `--mandate-store-file`.
+
+### Optional: enable persisted mandate/revocation cache (parity extension)
+
+Use this only when restart-recovery for local revocations/mandate lineage is required.
+If omitted, default behavior remains ephemeral.
+
+```bash
+PYTHONPATH=. predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file examples/authorityd/policy.json \
+  --mandate-store-file ./.predicate-authorityd/mandates.json
+```
+
 ### Optional: enable control-plane shipping
 
 To automatically ship proof events and usage records to
@@ -506,6 +523,7 @@ Example response:
 {
   "mode": "local_only",
   "policy_hot_reload_enabled": true,
+  "mandate_store_persistence_enabled": false,
   "revoked_principal_count": 0,
   "revoked_intent_count": 0,
   "revoked_mandate_count": 0,

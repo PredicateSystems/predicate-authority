@@ -96,8 +96,16 @@ class MandateClaims:
     issued_at_epoch_s: int
     expires_at_epoch_s: int
     delegated_by: str | None = None
+    parent_mandate_id: str | None = None
     delegation_depth: int = 0
     delegation_chain_hash: str | None = None
+    iss: str | None = None
+    aud: str | None = None
+    sub: str | None = None
+    iat: int | None = None
+    exp: int | None = None
+    nbf: int | None = None
+    jti: str | None = None
 
 
 @dataclass(frozen=True)

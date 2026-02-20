@@ -205,6 +205,11 @@ predicate-authority revoke intent --host 127.0.0.1 --port 8787 --hash <intent_ha
 predicate-authorityd --host 127.0.0.1 --port 8787 --mode local_only --policy-file examples/authorityd/policy.json
 ```
 
+Mandate cache behavior:
+
+- default is ephemeral in-memory mandate/revocation cache,
+- set `--mandate-store-file <path>` to enable optional local persistence and restart recovery.
+
 ### Identity mode options (`predicate-authorityd`)
 
 - `--identity-mode local`: deterministic local bridge (default).

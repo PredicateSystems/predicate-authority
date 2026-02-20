@@ -168,6 +168,29 @@ def test_daemon_exposes_health_and_status_endpoints(tmp_path: Path) -> None:
         assert health["mode"] == "local_only"
         assert status["daemon_running"] is True
         assert status["policy_hot_reload_enabled"] is True
+        assert status["mandate_store_persistence_enabled"] is False
+    finally:
+        daemon.stop()
+
+
+def test_daemon_status_exposes_mandate_store_persistence_mode(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({"rules": []}), encoding="utf-8")
+    sidecar = _build_default_sidecar(
+        mode=AuthorityMode.LOCAL_ONLY,
+        policy_file=str(policy_file),
+        credential_store_file=str(tmp_path / "credentials.json"),
+        mandate_store_file=str(tmp_path / "mandates.json"),
+    )
+    daemon = PredicateAuthorityDaemon(
+        sidecar=sidecar,
+        config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=0.05),
+    )
+    daemon.start()
+    try:
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        status = _fetch_json(f"{base_url}/status")
+        assert status["mandate_store_persistence_enabled"] is True
     finally:
         daemon.stop()
 
@@ -321,6 +344,8 @@ def test_daemon_supports_policy_reload_and_revoke_endpoints(tmp_path: Path) -> N
         assert revoke_principal["ok"] is True
         assert revoke_intent["ok"] is True
         assert revoke_mandate["ok"] is True
+        assert revoke_mandate["cascade"] is False
+        assert int(revoke_mandate["revoked_count"]) >= 1
         assert int(status["revoked_principal_count"]) >= 1
         assert int(status["revoked_intent_count"]) >= 1
         assert int(status["revoked_mandate_count"]) >= 1
@@ -1420,3 +1445,157 @@ def test_daemon_restart_recovers_queue_after_partition(tmp_path: Path) -> None:
             daemon_after_restart.stop()
         healthy_server.shutdown()
         healthy_server.server_close()
+
+
+def test_daemon_restart_recovers_revocations_when_mandate_store_enabled(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    mandate_store_file = tmp_path / "mandates.json"
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            mandate_store_file=str(mandate_store_file),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon.start()
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        pre_revoke_status, pre_revoke_payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:persisted-revoke",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "persisted-revocation",
+                "state_evidence": {"source": "test", "state_hash": "persisted-state"},
+            },
+        )
+        assert pre_revoke_status == 200
+        assert pre_revoke_payload["allowed"] is True
+        revoke_response = _post_json(
+            f"{base_url}/revoke/principal", {"principal_id": "agent:persisted-revoke"}
+        )
+        assert revoke_response["ok"] is True
+    finally:
+        if daemon is not None:
+            daemon.stop()
+
+    daemon_after_restart: PredicateAuthorityDaemon | None = None
+    try:
+        restarted_sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+            mandate_store_file=str(mandate_store_file),
+        )
+        daemon_after_restart = PredicateAuthorityDaemon(
+            sidecar=restarted_sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon_after_restart.start()
+        base_url = f"http://127.0.0.1:{daemon_after_restart.bound_port}"
+        post_revoke_status, post_revoke_payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:persisted-revoke",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "persisted-revocation",
+                "state_evidence": {"source": "test", "state_hash": "persisted-state"},
+            },
+        )
+        assert post_revoke_status == 403
+        assert post_revoke_payload["allowed"] is False
+        assert post_revoke_payload["reason"] == "invalid_mandate"
+    finally:
+        if daemon_after_restart is not None:
+            daemon_after_restart.stop()
+
+
+def test_daemon_restart_drops_revocations_when_mandate_store_disabled(tmp_path: Path) -> None:
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "name": "allow-any-http",
+                        "effect": "allow",
+                        "principals": ["agent:*"],
+                        "actions": ["http.*"],
+                        "resources": ["https://*/*"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    daemon: PredicateAuthorityDaemon | None = None
+    try:
+        sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+        )
+        daemon = PredicateAuthorityDaemon(
+            sidecar=sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon.start()
+        base_url = f"http://127.0.0.1:{daemon.bound_port}"
+        revoke_response = _post_json(
+            f"{base_url}/revoke/principal", {"principal_id": "agent:ephemeral-revoke"}
+        )
+        assert revoke_response["ok"] is True
+    finally:
+        if daemon is not None:
+            daemon.stop()
+
+    daemon_after_restart: PredicateAuthorityDaemon | None = None
+    try:
+        restarted_sidecar = _build_default_sidecar(
+            mode=AuthorityMode.LOCAL_ONLY,
+            policy_file=str(policy_file),
+            credential_store_file=str(tmp_path / "credentials.json"),
+        )
+        daemon_after_restart = PredicateAuthorityDaemon(
+            sidecar=restarted_sidecar,
+            config=DaemonConfig(host="127.0.0.1", port=0, policy_poll_interval_s=10.0),
+        )
+        daemon_after_restart.start()
+        base_url = f"http://127.0.0.1:{daemon_after_restart.bound_port}"
+        post_restart_status, post_restart_payload = _post_json_with_status(
+            f"{base_url}/v1/authorize",
+            {
+                "principal": "agent:ephemeral-revoke",
+                "action": "http.post",
+                "resource": "https://api.vendor.com/orders",
+                "intent_hash": "ephemeral-revocation",
+                "state_evidence": {"source": "test", "state_hash": "ephemeral-state"},
+            },
+        )
+        assert post_restart_status == 200
+        assert post_restart_payload["allowed"] is True
+    finally:
+        if daemon_after_restart is not None:
+            daemon_after_restart.stop()

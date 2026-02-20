@@ -16,6 +16,19 @@ from predicate_contracts import (
 )
 
 
+def _request() -> ActionRequest:
+    return ActionRequest(
+        principal=PrincipalRef(principal_id="agent:checkout"),
+        action_spec=ActionSpec(
+            action="http.post",
+            resource="https://api.vendor.com/orders",
+            intent="submit order",
+        ),
+        state_evidence=StateEvidence(source="unit-test", state_hash="sha256:test"),
+        verification_evidence=VerificationEvidence(),
+    )
+
+
 def test_authority_client_mint_and_verify_with_local_yaml_policy(tmp_path: Path) -> None:
     policy = tmp_path / "policy.yaml"
     policy.write_text(
@@ -37,16 +50,7 @@ def test_authority_client_mint_and_verify_with_local_yaml_policy(tmp_path: Path)
     context = AuthorityClient.from_policy_file(str(policy), secret_key="local-test-secret")
     client = context.client
 
-    request = ActionRequest(
-        principal=PrincipalRef(principal_id="agent:checkout"),
-        action_spec=ActionSpec(
-            action="http.post",
-            resource="https://api.vendor.com/orders",
-            intent="submit order",
-        ),
-        state_evidence=StateEvidence(source="unit-test", state_hash="sha256:test"),
-        verification_evidence=VerificationEvidence(),
-    )
+    request = _request()
     decision = client.authorize(request)
 
     assert decision.allowed
@@ -77,16 +81,7 @@ def test_authority_client_global_max_depth_from_yaml_is_enforced(tmp_path: Path)
     )
     context = AuthorityClient.from_policy_file(str(policy), secret_key="local-test-secret")
     client = context.client
-    request = ActionRequest(
-        principal=PrincipalRef(principal_id="agent:checkout"),
-        action_spec=ActionSpec(
-            action="http.post",
-            resource="https://api.vendor.com/orders",
-            intent="submit order",
-        ),
-        state_evidence=StateEvidence(source="unit-test", state_hash="sha256:test"),
-        verification_evidence=VerificationEvidence(),
-    )
+    request = _request()
     root = client.authorize(request)
     assert root.allowed is True
     assert root.mandate is not None
@@ -119,3 +114,75 @@ def test_authority_client_from_env(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     monkeypatch.setenv("PREDICATE_AUTHORITY_MANDATE_TTL_SECONDS", "120")
     context = AuthorityClient.from_env()
     assert context.policy_file == str(policy)
+
+
+def test_revoke_mandate_without_cascade_keeps_child_active(tmp_path: Path) -> None:
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "\n".join(
+            [
+                "rules:",
+                "  - name: allow-orders-create",
+                "    effect: allow",
+                "    principals:",
+                "      - agent:checkout",
+                "    actions:",
+                "      - http.post",
+                "    resources:",
+                "      - https://api.vendor.com/orders",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    context = AuthorityClient.from_policy_file(str(policy), secret_key="local-test-secret")
+    client = context.client
+    request = _request()
+
+    root = client.authorize(request)
+    assert root.allowed is True
+    assert root.mandate is not None
+    child = client.authorize(request, parent_mandate=root.mandate)
+    assert child.allowed is True
+    assert child.mandate is not None
+
+    revoked_count = client.revoke_mandate(root.mandate.claims.mandate_id, cascade=False)
+    child_verified = client.verify_token(child.mandate.token)
+
+    assert revoked_count == 1
+    assert child_verified is not None
+
+
+def test_revoke_mandate_with_cascade_revokes_descendants(tmp_path: Path) -> None:
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "\n".join(
+            [
+                "rules:",
+                "  - name: allow-orders-create",
+                "    effect: allow",
+                "    principals:",
+                "      - agent:checkout",
+                "    actions:",
+                "      - http.post",
+                "    resources:",
+                "      - https://api.vendor.com/orders",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    context = AuthorityClient.from_policy_file(str(policy), secret_key="local-test-secret")
+    client = context.client
+    request = _request()
+
+    root = client.authorize(request)
+    assert root.allowed is True
+    assert root.mandate is not None
+    child = client.authorize(request, parent_mandate=root.mandate)
+    assert child.allowed is True
+    assert child.mandate is not None
+
+    revoked_count = client.revoke_mandate(root.mandate.claims.mandate_id, cascade=True)
+    child_verified = client.verify_token(child.mandate.token)
+
+    assert revoked_count >= 2
+    assert child_verified is None
