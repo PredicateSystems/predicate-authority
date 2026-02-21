@@ -168,6 +168,36 @@ predicate-authorityd \
   --local-idp-audience "api://predicate-authority"
 ```
 
+### Cloud-connected sidecar (control-plane sync)
+
+Connect the sidecar to Predicate Authority control-plane for policy sync, revocation push, and audit forwarding:
+
+```bash
+export PREDICATE_API_KEY="your-api-key"
+
+predicate-authorityd \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode cloud_connected \
+  --control-plane-url https://api.predicatesystems.dev \
+  --tenant-id your-tenant \
+  --project-id your-project \
+  --predicate-api-key $PREDICATE_API_KEY \
+  --sync-enabled
+```
+
+For the Rust sidecar (`rust-predicate-authorityd`), use the same flags:
+
+```bash
+./predicate-authorityd run \
+  --mode cloud_connected \
+  --control-plane-url https://api.predicatesystems.dev \
+  --tenant-id your-tenant \
+  --project-id your-project \
+  --predicate-api-key $PREDICATE_API_KEY \
+  --sync-enabled
+```
+
 ## Operations CLI
 
 `predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
@@ -277,7 +307,7 @@ Background flush worker status fields:
 export CONTROL_PLANE_URL="http://127.0.0.1:8080"
 export CONTROL_PLANE_TENANT_ID="dev-tenant"
 export CONTROL_PLANE_PROJECT_ID="dev-project"
-export CONTROL_PLANE_AUTH_TOKEN="<bearer-token>"
+export PREDICATE_API_KEY="<your-api-key>"
 
 PYTHONPATH=. predicate-authorityd \
   --host 127.0.0.1 \

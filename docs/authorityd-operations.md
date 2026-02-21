@@ -69,7 +69,7 @@ To automatically ship proof events and usage records to
 export CONTROL_PLANE_URL="http://127.0.0.1:8080"
 export CONTROL_PLANE_TENANT_ID="dev-tenant"
 export CONTROL_PLANE_PROJECT_ID="dev-project"
-export CONTROL_PLANE_AUTH_TOKEN="<bearer-token>"
+export CONTROL_PLANE_API_KEY="<bearer-token>"
 
 PYTHONPATH=. predicate-authorityd \
   --host 127.0.0.1 \
@@ -89,7 +89,7 @@ updates pushed through long-poll sync instead of waiting for file-based policy p
 export CONTROL_PLANE_URL="http://127.0.0.1:8080"
 export CONTROL_PLANE_TENANT_ID="dev-tenant"
 export CONTROL_PLANE_PROJECT_ID="dev-project"
-export CONTROL_PLANE_AUTH_TOKEN="<bearer-token>"
+export CONTROL_PLANE_API_KEY="<bearer-token>"
 
 PYTHONPATH=. predicate-authorityd \
   --host 127.0.0.1 \
