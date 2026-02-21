@@ -319,3 +319,237 @@ class TestDesktopCanonicalization:
 
     def test_exports_desktop_schema_version(self) -> None:
         assert DESKTOP_SCHEMA_VERSION == "desktop:v1.0"
+
+
+class TestPhase4Verification:
+    """Phase 4 verification tests for cross-platform, ANSI edge cases, and UI tree determinism."""
+
+    class TestCrossPlatformPathNormalization:
+        """Cross-platform path normalization tests."""
+
+        def test_normalizes_unix_paths_with_dot_components(self) -> None:
+            result = normalize_path("/home/user/./project/../project/src")
+            assert "/." not in result
+            assert "/.." not in result
+            assert "project" in result
+            assert "src" in result
+
+        def test_handles_multiple_consecutive_slashes(self) -> None:
+            result = normalize_path("/foo//bar///baz")
+            assert "//" not in result
+
+        def test_preserves_absolute_paths(self) -> None:
+            result = normalize_path("/absolute/path/to/file")
+            assert result.startswith("/")
+
+        def test_handles_empty_path_components(self) -> None:
+            result = normalize_path("/foo/./bar")
+            assert result == "/foo/bar"
+
+        def test_handles_trailing_slashes_consistently(self) -> None:
+            with_slash = normalize_path("/foo/bar/")
+            without_slash = normalize_path("/foo/bar")
+            assert with_slash.rstrip("/") == without_slash.rstrip("/")
+
+        def test_handles_root_path(self) -> None:
+            result = normalize_path("/")
+            assert result == "/"
+
+    class TestAnsiStrippingEdgeCases:
+        """ANSI stripping edge case tests."""
+
+        def test_strips_256_color_codes(self) -> None:
+            assert strip_ansi("\x1b[38;5;196mRed256\x1b[0m") == "Red256"
+            assert strip_ansi("\x1b[48;5;21mBlueBg\x1b[0m") == "BlueBg"
+
+        def test_strips_24bit_true_color_codes(self) -> None:
+            assert strip_ansi("\x1b[38;2;255;100;50mOrange\x1b[0m") == "Orange"
+
+        def test_strips_bold_italic_underline_codes(self) -> None:
+            assert strip_ansi("\x1b[1mBold\x1b[0m") == "Bold"
+            assert strip_ansi("\x1b[3mItalic\x1b[0m") == "Italic"
+            assert strip_ansi("\x1b[4mUnderline\x1b[0m") == "Underline"
+
+        def test_strips_cursor_movement_codes(self) -> None:
+            assert strip_ansi("\x1b[5ACursor Up") == "Cursor Up"
+            assert strip_ansi("\x1b[3BCursor Down") == "Cursor Down"
+            assert strip_ansi("\x1b[2CCursor Forward") == "Cursor Forward"
+            assert strip_ansi("\x1b[1DCursor Back") == "Cursor Back"
+
+        def test_strips_erase_codes(self) -> None:
+            assert strip_ansi("\x1b[2JClear Screen") == "Clear Screen"
+            assert strip_ansi("\x1b[KClear Line") == "Clear Line"
+
+        def test_strips_scroll_codes(self) -> None:
+            assert strip_ansi("\x1b[3SScroll Up") == "Scroll Up"
+            assert strip_ansi("\x1b[2TScroll Down") == "Scroll Down"
+
+        def test_handles_multiple_ansi_codes_in_sequence(self) -> None:
+            complex_text = "\x1b[1m\x1b[31m\x1b[4mBold Red Underline\x1b[0m"
+            assert strip_ansi(complex_text) == "Bold Red Underline"
+
+        def test_handles_ansi_codes_at_start_middle_and_end(self) -> None:
+            text = "\x1b[32mStart\x1b[0m Middle \x1b[33mEnd\x1b[0m"
+            assert strip_ansi(text) == "Start Middle End"
+
+        def test_preserves_text_without_ansi_codes(self) -> None:
+            plain = "No escape codes here: [not ansi] {also not}"
+            assert strip_ansi(plain) == plain
+
+    class TestUITreeDeterminism:
+        """UI tree determinism tests."""
+
+        def test_produces_same_hash_regardless_of_child_order(self) -> None:
+            tree1 = {
+                "role": "window",
+                "name": "Main",
+                "children": [
+                    {"role": "button", "name": "Save", "children": []},
+                    {"role": "button", "name": "Cancel", "children": []},
+                    {"role": "textbox", "name": "Input", "children": []},
+                ],
+            }
+            tree2 = {
+                "role": "window",
+                "name": "Main",
+                "children": [
+                    {"role": "textbox", "name": "Input", "children": []},
+                    {"role": "button", "name": "Cancel", "children": []},
+                    {"role": "button", "name": "Save", "children": []},
+                ],
+            }
+
+            canonical1 = canonicalize_accessibility_node(tree1)
+            canonical2 = canonicalize_accessibility_node(tree2)
+
+            assert canonical1 == canonical2
+
+        def test_normalizes_role_case(self) -> None:
+            upper = canonicalize_accessibility_node(
+                {"role": "BUTTON", "name": "Click", "children": []}
+            )
+            lower = canonicalize_accessibility_node(
+                {"role": "button", "name": "Click", "children": []}
+            )
+
+            assert upper.role == lower.role
+            assert upper.role == "button"
+
+        def test_normalizes_name_whitespace_and_case(self) -> None:
+            node1 = canonicalize_accessibility_node(
+                {"role": "button", "name": "  Click   Me  ", "children": []}
+            )
+            node2 = canonicalize_accessibility_node(
+                {"role": "button", "name": "click me", "children": []}
+            )
+
+            assert node1.name_norm == node2.name_norm
+            assert node1.name_norm == "click me"
+
+        def test_handles_empty_children_list(self) -> None:
+            node = canonicalize_accessibility_node(
+                {"role": "button", "name": "Test", "children": []}
+            )
+            assert node.children == ()
+
+        def test_handles_missing_children(self) -> None:
+            node = canonicalize_accessibility_node({"role": "button", "name": "Test"})
+            assert node.children == ()
+
+        def test_handles_none_name(self) -> None:
+            node = canonicalize_accessibility_node({"role": "button", "name": None, "children": []})
+            assert node.name_norm == ""
+
+        def test_produces_identical_desktop_hashes_for_same_content(self) -> None:
+            snap1 = {
+                "app_name": "  FIREFOX  ",
+                "window_title": "  GitHub - Pull Requests  ",
+                "focused_role": "BUTTON",
+                "focused_name": "  MERGE  ",
+            }
+            snap2 = {
+                "app_name": "firefox",
+                "window_title": "github - pull requests",
+                "focused_role": "button",
+                "focused_name": "merge",
+            }
+
+            assert compute_desktop_state_hash(snap1) == compute_desktop_state_hash(snap2)
+
+        def test_sorts_nested_children_deterministically(self) -> None:
+            tree = {
+                "role": "window",
+                "children": [
+                    {
+                        "role": "panel",
+                        "name": "B",
+                        "children": [
+                            {"role": "button", "name": "Z", "children": []},
+                            {"role": "button", "name": "A", "children": []},
+                        ],
+                    },
+                    {
+                        "role": "panel",
+                        "name": "A",
+                        "children": [
+                            {"role": "link", "name": "Y", "children": []},
+                            {"role": "link", "name": "X", "children": []},
+                        ],
+                    },
+                ],
+            }
+
+            canonical = canonicalize_accessibility_node(tree)
+
+            # First-level: panel A should come before panel B
+            assert canonical.children[0].name_norm == "a"
+            assert canonical.children[1].name_norm == "b"
+
+            # Second-level: within panel A, link X should come before link Y
+            assert canonical.children[0].children[0].name_norm == "x"
+            assert canonical.children[0].children[1].name_norm == "y"
+
+            # Within panel B, button A should come before button Z
+            assert canonical.children[1].children[0].name_norm == "a"
+            assert canonical.children[1].children[1].name_norm == "z"
+
+    class TestTerminalHashStability:
+        """Terminal hash stability tests."""
+
+        def test_identical_hashes_for_varying_whitespace(self) -> None:
+            snap1 = {"session_id": "s1", "command": "  npm   run   build  "}
+            snap2 = {"session_id": "s1", "command": "npm run build"}
+
+            assert compute_terminal_state_hash(snap1) == compute_terminal_state_hash(snap2)
+
+        def test_identical_hashes_for_transcripts_with_ansi_removed(self) -> None:
+            snap1 = {
+                "session_id": "s1",
+                "command": "test",
+                "transcript": "\x1b[32m✓\x1b[0m Tests passed",
+            }
+            snap2 = {
+                "session_id": "s1",
+                "command": "test",
+                "transcript": "✓ Tests passed",
+            }
+
+            assert compute_terminal_state_hash(snap1) == compute_terminal_state_hash(snap2)
+
+        def test_different_hashes_for_different_commands(self) -> None:
+            snap1 = {"session_id": "s1", "command": "npm install"}
+            snap2 = {"session_id": "s1", "command": "npm update"}
+
+            assert compute_terminal_state_hash(snap1) != compute_terminal_state_hash(snap2)
+
+        def test_different_hashes_for_different_session_ids(self) -> None:
+            snap1 = {"session_id": "session-1", "command": "test"}
+            snap2 = {"session_id": "session-2", "command": "test"}
+
+            assert compute_terminal_state_hash(snap1) != compute_terminal_state_hash(snap2)
+
+        def test_handles_timestamps_in_transcripts(self) -> None:
+            snap1 = {"session_id": "s1", "transcript": "Build completed at 10:30:45"}
+            snap2 = {"session_id": "s1", "transcript": "Build completed at 14:22:01"}
+
+            assert compute_terminal_state_hash(snap1) == compute_terminal_state_hash(snap2)

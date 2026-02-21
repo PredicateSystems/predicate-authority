@@ -610,8 +610,122 @@ if not decision.allowed:
 
 ---
 
+## Canonicalization for reproducible state hashes
+
+`predicate_contracts` includes canonicalization functions for computing reproducible
+`state_hash` values. This ensures that semantically equivalent inputs produce
+identical hashes, even with superficial differences like whitespace or ANSI codes.
+
+### Terminal canonicalization
+
+```python
+from predicate_contracts import (
+    canonicalize_terminal_snapshot,
+    compute_terminal_state_hash,
+    TERMINAL_SCHEMA_VERSION,
+)
+
+# Raw terminal state with ANSI codes and extra whitespace
+raw_snapshot = {
+    "session_id": "sess-123",
+    "command": "  npm   test  ",
+    "transcript": "\x1b[32mPASS\x1b[0m All tests passed at 10:30:45",
+    "cwd": "/home/user/./project/../project",
+}
+
+# Compute canonical hash
+state_hash = compute_terminal_state_hash(raw_snapshot)
+# Returns: "sha256:..." (64-char hex with prefix)
+
+# View normalized snapshot
+canonical = canonicalize_terminal_snapshot(raw_snapshot)
+print(canonical.command_normalized)      # "npm test"
+print(canonical.transcript_normalized)   # "PASS All tests passed at [TIMESTAMP]"
+print(canonical.cwd_normalized)          # "/home/user/project"
+```
+
+**What gets normalized:**
+
+| Field | Normalization | Example |
+|-------|---------------|---------|
+| `command` | Trim, collapse whitespace | `"  ls   -la  "` → `"ls -la"` |
+| `transcript` | Strip ANSI, normalize timestamps, collapse whitespace | `"\x1b[32mOK\x1b[0m 10:30:45"` → `"OK [TIMESTAMP]"` |
+| `cwd` | Resolve `.` and `..` | `"/foo/./bar/../baz"` → `"/foo/baz"` |
+| `env` | Sort keys, redact secrets | `AWS_SECRET_KEY` → `[REDACTED]` |
+
+### Desktop accessibility canonicalization
+
+```python
+from predicate_contracts import (
+    canonicalize_desktop_snapshot,
+    compute_desktop_state_hash,
+    canonicalize_accessibility_node,
+    DESKTOP_SCHEMA_VERSION,
+)
+
+# Raw desktop state with varying case/whitespace
+raw_snapshot = {
+    "app_name": "  FIREFOX  ",
+    "window_title": "  GitHub - Pull Requests  ",
+    "focused_role": "BUTTON",
+    "focused_name": "  Merge  ",
+}
+
+# Compute canonical hash
+state_hash = compute_desktop_state_hash(raw_snapshot)
+
+# View normalized snapshot
+canonical = canonicalize_desktop_snapshot(raw_snapshot)
+print(canonical.app_name_norm)       # "firefox"
+print(canonical.window_title_norm)   # "github - pull requests"
+print(canonical.focused_path)        # "button[merge]"
+```
+
+**UI tree determinism:**
+
+```python
+# Children are sorted by (role, name) for deterministic hashing
+tree = {
+    "role": "window",
+    "children": [
+        {"role": "button", "name": "Cancel"},
+        {"role": "button", "name": "OK"},
+    ],
+}
+canonical = canonicalize_accessibility_node(tree)
+# Children sorted: OK comes before Cancel alphabetically
+```
+
+### Schema versions
+
+Use schema versions for forward compatibility:
+
+- `TERMINAL_SCHEMA_VERSION = "terminal:v1.0"`
+- `DESKTOP_SCHEMA_VERSION = "desktop:v1.0"`
+
+These are included in `StateEvidence.schema_version` to track canonicalization format.
+
+### Utility functions
+
+```python
+from predicate_contracts import (
+    normalize_text,      # Lowercase, trim, collapse whitespace
+    normalize_command,   # Trim, collapse whitespace (preserves case)
+    strip_ansi,          # Remove ANSI escape codes
+    normalize_timestamps, # Replace timestamps with [TIMESTAMP]
+    normalize_transcript, # Full transcript normalization
+    normalize_path,      # Resolve . and .. in paths
+    is_secret_key,       # Check if env var should be redacted
+    hash_environment,    # Hash env vars with secret redaction
+    sha256,              # Compute SHA-256 hash
+)
+```
+
+---
+
 ## Where to go next
 
 - Operations guide: `docs/authorityd-operations.md`
 - Architecture proposal: `docs/predicate_authority_docs/better-sdk-opportunity-proposal.md`
 - Governance sign-off tracker: `docs/predicate_authority_docs/governance-signoff-tracker.md`
+- Canonicalization design: `docs/predicate_claw/NON_WEB_CANONICALIZATION_DESIGN.md`
