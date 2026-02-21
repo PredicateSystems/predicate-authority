@@ -52,9 +52,31 @@ Implemented in this repository:
 - policy evaluation with deny precedence and required verification labels,
 - typed [predicate-sdk](https://github.com/PredicateSystems/sdk-python) integration adapter (`predicate_authority.integrations`),
 - OpenTelemetry-compatible trace emitter (`OpenTelemetryTraceEmitter`),
-- `predicate-authorityd` sidecar daemon with policy polling and health/status endpoints,
-- ops-focused CLI commands for sidecar health/status, policy validate/reload, and revoke controls,
-- pytest coverage for authorization, mandate, integration, telemetry, daemon, and CLI flows.
+- pytest coverage for authorization, mandate, integration, and telemetry flows.
+
+## Sidecar Prerequisite
+
+This SDK requires the **Predicate Authority Sidecar** daemon to be running. The sidecar is a lightweight Rust binary that handles policy evaluation and mandate signing.
+
+| Resource | Link |
+|----------|------|
+| Sidecar Repository | [rust-predicate-authorityd](https://github.com/PredicateSystems/predicate-authority-sidecar) |
+| Download Binaries | [Latest Releases](https://github.com/PredicateSystems/predicate-authority-sidecar/releases) |
+| License | MIT / Apache 2.0 |
+
+### Quick Sidecar Setup
+
+```bash
+# Download the latest release for your platform
+# Linux x64, macOS x64/ARM64, Windows x64 available
+
+# Extract and run
+tar -xzf predicate-authorityd-*.tar.gz
+chmod +x predicate-authorityd
+
+# Start with a policy file (local mode)
+./predicate-authorityd run --port 8787 --mode local_only --policy-file policy.json
+```
 
 ## Installation
 
@@ -154,15 +176,18 @@ python examples/delegation/oidc_compat_demo.py \
   --scope "${OIDC_SCOPE:-authority:check}"
 ```
 
-### Local IdP quick command
+### Local IdP mode (development/air-gapped)
+
+For development or air-gapped environments without external IdP:
 
 ```bash
 export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
-predicate-authorityd \
+
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file examples/authorityd/policy.json \
+  --policy-file policy.json \
   --identity-mode local-idp \
   --local-idp-issuer "http://localhost/predicate-local-idp" \
   --local-idp-audience "api://predicate-authority"
@@ -175,7 +200,7 @@ Connect the sidecar to Predicate Authority control-plane for policy sync, revoca
 ```bash
 export PREDICATE_API_KEY="your-api-key"
 
-predicate-authorityd \
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode cloud_connected \
@@ -186,21 +211,7 @@ predicate-authorityd \
   --sync-enabled
 ```
 
-For the Rust sidecar (`rust-predicate-authorityd`), use the same flags:
-
-```bash
-./predicate-authorityd run \
-  --mode cloud_connected \
-  --control-plane-url https://api.predicatesystems.dev \
-  --tenant-id your-tenant \
-  --project-id your-project \
-  --predicate-api-key $PREDICATE_API_KEY \
-  --sync-enabled
-```
-
-## Operations CLI
-
-`predicate-authority` provides an ops-focused CLI for sidecar/runtime workflows.
+## Sidecar Operations
 
 ### Ops docs quick links
 
@@ -211,121 +222,39 @@ For the Rust sidecar (`rust-predicate-authorityd`), use the same flags:
 ### Sidecar health and status
 
 ```bash
-predicate-authority sidecar health --host 127.0.0.1 --port 8787
-predicate-authority sidecar status --host 127.0.0.1 --port 8787
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/status
 ```
 
-### Policy validation and reload
+### Policy reload
 
 ```bash
-predicate-authority policy validate --file examples/authorityd/policy.json
-predicate-authority policy reload --host 127.0.0.1 --port 8787
+curl -X POST http://127.0.0.1:8787/policy/reload
 ```
 
 ### Revocation controls
 
 ```bash
-predicate-authority revoke principal --host 127.0.0.1 --port 8787 --id agent:orders-01
-predicate-authority revoke intent --host 127.0.0.1 --port 8787 --hash <intent_hash>
+curl -X POST http://127.0.0.1:8787/revoke/principal -d '{"principal_id": "agent:orders-01"}'
+curl -X POST http://127.0.0.1:8787/revoke/intent -d '{"intent_hash": "<intent_hash>"}'
 ```
 
-### Daemon startup
-
-```bash
-predicate-authorityd --host 127.0.0.1 --port 8787 --mode local_only --policy-file examples/authorityd/policy.json
-```
-
-Mandate cache behavior:
-
-- default is ephemeral in-memory mandate/revocation cache,
-- set `--mandate-store-file <path>` to enable optional local persistence and restart recovery.
-
-### Identity mode options (`predicate-authorityd`)
+### Identity mode options
 
 - `--identity-mode local`: deterministic local bridge (default).
 - `--identity-mode local-idp`: local IdP-style signed token mode for dev/air-gapped workflows.
 - `--identity-mode oidc`: enterprise OIDC bridge mode.
 - `--identity-mode entra`: Microsoft Entra bridge mode.
 
-Example (`local-idp`):
+### Runtime endpoints
 
-```bash
-export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
-predicate-authorityd \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --identity-mode local-idp \
-  --local-idp-issuer "http://localhost/predicate-local-idp" \
-  --local-idp-audience "api://predicate-authority"
-```
-
-### Local identity registry (ephemeral + TTL + flush queue)
-
-Enable sidecar-managed local task identities and local ledger queue:
-
-```bash
-PYTHONPATH=. predicate-authorityd \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --identity-mode local-idp \
-  --local-identity-enabled \
-  --local-identity-registry-file ./.predicate-authorityd/local-identities.json \
-  --local-identity-default-ttl-s 900 \
-  --flush-worker-enabled \
-  --flush-worker-interval-s 2.0 \
-  --flush-worker-max-batch-size 50 \
-  --flush-worker-dead-letter-max-attempts 5
-```
-
-Runtime endpoints:
-
-- `POST /identity/task` (issue ephemeral task identity)
-- `GET /identity/list` (list identities)
-- `POST /identity/revoke` (revoke identity)
-- `GET /ledger/flush-queue` (inspect pending local ledger queue)
-- `GET /ledger/dead-letter` (list quarantined queue items only)
-- `POST /ledger/flush-ack` (mark queue item as flushed)
-- `POST /ledger/flush-now` (manually trigger immediate queue flush)
-- `POST /ledger/requeue` (requeue quarantined item for retry)
-
-Background flush worker status fields:
-
-- `flush_cycle_count`
-- `flush_sent_count`
-- `flush_failed_count`
-- `flush_quarantined_count`
-- `last_flush_epoch_s`
-- `last_flush_error`
-
-### How to run with control-plane shipping (out-of-the-box)
-
-```bash
-export CONTROL_PLANE_URL="http://127.0.0.1:8080"
-export CONTROL_PLANE_TENANT_ID="dev-tenant"
-export CONTROL_PLANE_PROJECT_ID="dev-project"
-export PREDICATE_API_KEY="<your-api-key>"
-
-PYTHONPATH=. predicate-authorityd \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --control-plane-enabled \
-  --control-plane-fail-open
-```
-
-The `/status` endpoint now includes:
-
-- `control_plane_emitter_attached`
-- `control_plane_audit_push_success_count`
-- `control_plane_audit_push_failure_count`
-- `control_plane_usage_push_success_count`
-- `control_plane_usage_push_failure_count`
-- `control_plane_last_push_error`
+- `POST /v1/authorize` - Core authorization endpoint
+- `GET /health` - Health check
+- `GET /status` - Detailed status with metrics
+- `POST /policy/reload` - Hot-reload policy
+- `POST /revoke/principal` - Revoke by principal
+- `POST /revoke/intent` - Revoke by intent hash
+- `POST /revoke/mandate` - Revoke by mandate ID
 
 ## Security: Local Kill-Switch Path
 
