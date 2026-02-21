@@ -53,7 +53,7 @@ def _safe_urlopen(url: str, *, timeout: int = 30):  # noqa: ANN201
     return urlopen(url, timeout=timeout)  # nosec B310
 
 
-SIDECAR_REPO = "PredicateSystems/rust-predicate-authorityd"
+SIDECAR_REPO = "PredicateSystems/predicate-authority-sidecar"
 SIDECAR_BINARY_NAME = "predicate-authorityd"
 
 # Platform mapping: (system, machine) -> artifact name
