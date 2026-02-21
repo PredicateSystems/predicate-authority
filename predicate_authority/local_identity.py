@@ -48,11 +48,25 @@ class LocalIdentityRegistryStats:
 
 
 class LocalIdentityRegistry:
-    def __init__(self, file_path: str, default_ttl_seconds: int = 900) -> None:
+    # Default queue item TTL: 24 hours
+    # Ephemeral by design: local logs auto-expire to encourage control-plane adoption
+    DEFAULT_QUEUE_ITEM_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+
+    def __init__(
+        self,
+        file_path: str,
+        default_ttl_seconds: int = 900,
+        queue_item_ttl_seconds: int | None = None,
+    ) -> None:
         if default_ttl_seconds <= 0:
             raise ValueError("default_ttl_seconds must be > 0")
         self._file_path = Path(file_path)
         self._default_ttl_seconds = default_ttl_seconds
+        self._queue_item_ttl_seconds = (
+            queue_item_ttl_seconds
+            if queue_item_ttl_seconds is not None
+            else self.DEFAULT_QUEUE_ITEM_TTL_SECONDS
+        )
         self._lock = Lock()
         self._ensure_store_path()
 
@@ -164,6 +178,35 @@ class LocalIdentityRegistry:
                 self._write_all_unlocked(payload)
         return expired_count
 
+    def expire_queue_items(self, now_epoch_s: int | None = None) -> int:
+        """Remove queue items older than queue_item_ttl_seconds.
+
+        Ephemeral logging: local audit events auto-expire to discourage
+        reliance on sidecar logs for enterprise audit requirements.
+        Control-plane provides durable, queryable audit storage.
+
+        Returns the count of expired (deleted) queue items.
+        """
+        now = now_epoch_s if now_epoch_s is not None else int(time.time())
+        cutoff = now - self._queue_item_ttl_seconds
+        expired_count = 0
+        with self._lock:
+            payload = self._read_all_unlocked()
+            queue = payload.setdefault("flush_queue", {})
+            to_delete: list[str] = []
+            for queue_item_id, raw in queue.items():
+                if not isinstance(raw, dict):
+                    continue
+                enqueued_at = int(raw.get("enqueued_at_epoch_s", now))
+                if enqueued_at < cutoff:
+                    to_delete.append(queue_item_id)
+            for queue_item_id in to_delete:
+                del queue[queue_item_id]
+                expired_count += 1
+            if expired_count > 0:
+                self._write_all_unlocked(payload)
+        return expired_count
+
     def enqueue_proof_event(
         self, event: ProofEvent, source: str = "predicate-authorityd"
     ) -> LedgerQueueItem:
@@ -194,7 +237,21 @@ class LocalIdentityRegistry:
         include_flushed: bool = False,
         include_quarantined: bool = False,
         limit: int | None = None,
+        redact_payloads: bool = True,
     ) -> list[LedgerQueueItem]:
+        """List queue items with optional payload redaction.
+
+        By default, payloads are redacted to prevent local sidecar logs from
+        serving as a queryable audit trail. Full payloads are only accessible
+        via control-plane audit vault.
+
+        Args:
+            include_flushed: Include already-flushed items.
+            include_quarantined: Include quarantined (dead-letter) items.
+            limit: Maximum number of items to return.
+            redact_payloads: If True (default), sensitive payload fields are
+                replaced with "[REDACTED - use control-plane for full audit]".
+        """
         with self._lock:
             payload = self._read_all_unlocked()
             queue = payload.setdefault("flush_queue", {})
@@ -210,11 +267,48 @@ class LocalIdentityRegistry:
                 continue
             if not include_quarantined and item.quarantined:
                 continue
+            if redact_payloads:
+                item = self._redact_queue_item(item)
             result.append(item)
         result = sorted(result, key=lambda item: item.enqueued_at_epoch_s)
         if limit is not None and limit >= 0:
             return result[:limit]
         return result
+
+    def _redact_queue_item(self, item: LedgerQueueItem) -> LedgerQueueItem:
+        """Redact sensitive payload fields from queue item.
+
+        Preserves queue metadata (id, timestamps, status) but replaces
+        audit-relevant payload fields to discourage local log aggregation.
+        """
+        redacted_payload: dict[str, object] = {}
+        # Preserve only non-sensitive metadata
+        if "source" in item.payload:
+            redacted_payload["source"] = item.payload["source"]
+        if "event_type" in item.payload:
+            redacted_payload["event_type"] = item.payload["event_type"]
+        if "emitted_at_epoch_s" in item.payload:
+            redacted_payload["emitted_at_epoch_s"] = item.payload["emitted_at_epoch_s"]
+        # Redact audit-sensitive fields
+        redact_marker = "[REDACTED - use control-plane for full audit]"
+        for field_name in ("principal_id", "action", "resource", "reason", "mandate_id"):
+            if field_name in item.payload:
+                redacted_payload[field_name] = redact_marker
+        # Preserve allowed/denied decision indicator only
+        if "allowed" in item.payload:
+            redacted_payload["allowed"] = item.payload["allowed"]
+        return LedgerQueueItem(
+            queue_item_id=item.queue_item_id,
+            enqueued_at_epoch_s=item.enqueued_at_epoch_s,
+            payload=redacted_payload,
+            flushed=item.flushed,
+            flush_attempts=item.flush_attempts,
+            last_error=item.last_error,
+            flushed_at_epoch_s=item.flushed_at_epoch_s,
+            quarantined=item.quarantined,
+            quarantine_reason=item.quarantine_reason,
+            quarantined_at_epoch_s=item.quarantined_at_epoch_s,
+        )
 
     def mark_flush_ack(self, queue_item_id: str) -> bool:
         with self._lock:
@@ -258,13 +352,26 @@ class LocalIdentityRegistry:
             self._write_all_unlocked(payload)
             return True
 
-    def list_dead_letter_queue(self, limit: int | None = None) -> list[LedgerQueueItem]:
+    def list_dead_letter_queue(
+        self, limit: int | None = None, redact_payloads: bool = True
+    ) -> list[LedgerQueueItem]:
+        """List quarantined (dead-letter) queue items.
+
+        Args:
+            limit: Maximum number of items to return.
+            redact_payloads: If True (default), sensitive payload fields are
+                replaced with "[REDACTED - use control-plane for full audit]".
+        """
         items = self.list_flush_queue(
             include_flushed=True,
             include_quarantined=True,
-            limit=limit,
+            limit=None,  # Filter after, then apply limit
+            redact_payloads=redact_payloads,
         )
-        return [item for item in items if item.quarantined]
+        quarantined = [item for item in items if item.quarantined]
+        if limit is not None and limit >= 0:
+            return quarantined[:limit]
+        return quarantined
 
     def requeue_item(self, queue_item_id: str, reset_attempts: bool = True) -> bool:
         with self._lock:

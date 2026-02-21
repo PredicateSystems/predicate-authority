@@ -95,6 +95,9 @@ class LocalIdentityBootstrapConfig:
     enabled: bool = False
     registry_file_path: str | None = None
     default_ttl_seconds: int = 900
+    # Queue item TTL: local audit logs auto-expire to encourage control-plane usage
+    # Default: 24 hours (86400 seconds)
+    queue_item_ttl_seconds: int = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -695,11 +698,24 @@ class PredicateAuthorityDaemon:
     def _flush_queue_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
+                # Expire old queue items before flushing (ephemeral local logs)
+                self._expire_queue_items()
                 self._flush_once()
             except Exception as exc:  # noqa: BLE001
                 self._runtime.flush_failed_count += 1
                 self._runtime.last_flush_error = str(exc)
             self._stop_event.wait(timeout=self._flush_worker.interval_s)
+
+    def _expire_queue_items(self) -> int:
+        """Remove queue items that have exceeded their TTL.
+
+        Local sidecar logs are deliberately ephemeral to encourage
+        control-plane adoption for enterprise audit requirements.
+        """
+        registry = self._sidecar.local_identity_registry()
+        if registry is None:
+            return 0
+        return registry.expire_queue_items()
 
     def _flush_once(
         self,
@@ -902,6 +918,7 @@ def _build_default_sidecar(
         local_identity_registry = LocalIdentityRegistry(
             file_path=local_identity_config.registry_file_path,
             default_ttl_seconds=local_identity_config.default_ttl_seconds,
+            queue_item_ttl_seconds=local_identity_config.queue_item_ttl_seconds,
         )
         trace_emitters.append(LocalLedgerQueueEmitter(registry=local_identity_registry))
     trace_emitter = (
@@ -1101,6 +1118,16 @@ def main() -> None:
         default=str(Path.home() / ".predicate-authorityd" / "local-identities.json"),
     )
     parser.add_argument("--local-identity-default-ttl-s", type=int, default=900)
+    parser.add_argument(
+        "--queue-item-ttl-seconds",
+        type=int,
+        default=24 * 60 * 60,
+        help=(
+            "Ephemeral queue item TTL in seconds. Local audit events auto-expire "
+            "to discourage reliance on sidecar logs for enterprise audit. "
+            "Use control-plane for durable audit storage. Default: 86400 (24 hours)."
+        ),
+    )
     parser.add_argument(
         "--identity-mode",
         choices=["local", "local-idp", "oidc", "entra", "okta"],
@@ -1322,6 +1349,7 @@ def main() -> None:
         enabled=bool(args.local_identity_enabled),
         registry_file_path=str(args.local_identity_registry_file),
         default_ttl_seconds=max(1, int(args.local_identity_default_ttl_s)),
+        queue_item_ttl_seconds=max(60, int(args.queue_item_ttl_seconds)),  # min 1 minute
     )
     identity_bridge = _build_identity_bridge_from_args(args)
     mandate_signing_key = _resolve_mandate_signing_key(
