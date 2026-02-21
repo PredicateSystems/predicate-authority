@@ -1191,7 +1191,7 @@ def main() -> None:
     parser.add_argument(
         "--control-plane-url",
         default=None,
-        help="Control plane base URL (e.g. https://authority.example.com).",
+        help="Control plane base URL (default: https://api.predicatesystems.dev).",
     )
     parser.add_argument(
         "--control-plane-tenant-id",
@@ -1280,7 +1280,11 @@ def main() -> None:
 
     mode = AuthorityMode(args.mode)
     control_plane_auth_token = os.getenv(args.control_plane_auth_token_env)
-    control_plane_url = args.control_plane_url or os.getenv("CONTROL_PLANE_URL")
+    control_plane_url = (
+        args.control_plane_url
+        or os.getenv("CONTROL_PLANE_URL")
+        or "https://api.predicatesystems.dev"
+    )
     control_plane_tenant = args.control_plane_tenant_id or os.getenv(
         "CONTROL_PLANE_TENANT_ID", "dev-tenant"
     )
