@@ -1,3 +1,25 @@
+from predicate_contracts.canonicalization import (  # Types; Utility functions; Terminal canonicalization; Desktop canonicalization
+    DESKTOP_SCHEMA_VERSION,
+    TERMINAL_SCHEMA_VERSION,
+    CanonicalAccessibilityNode,
+    CanonicalDesktopSnapshot,
+    CanonicalTerminalSnapshot,
+    build_focused_path,
+    canonicalize_accessibility_node,
+    canonicalize_desktop_snapshot,
+    canonicalize_terminal_snapshot,
+    compute_desktop_state_hash,
+    compute_terminal_state_hash,
+    hash_environment,
+    is_secret_key,
+    normalize_command,
+    normalize_path,
+    normalize_text,
+    normalize_timestamps,
+    normalize_transcript,
+    sha256,
+    strip_ansi,
+)
 from predicate_contracts.models import (
     ActionRequest,
     ActionSpec,
@@ -21,6 +43,7 @@ from predicate_contracts.protocols import (
 )
 
 __all__ = [
+    # Models
     "ActionRequest",
     "ActionSpec",
     "AuthorizationDecision",
@@ -32,10 +55,35 @@ __all__ = [
     "ProofEvent",
     "SignedMandate",
     "StateEvidence",
-    "StateEvidenceProvider",
-    "TraceEmitter",
     "VerificationEvidence",
-    "VerificationEvidenceProvider",
     "VerificationSignal",
     "VerificationStatus",
+    # Protocols
+    "StateEvidenceProvider",
+    "TraceEmitter",
+    "VerificationEvidenceProvider",
+    # Canonicalization types
+    "CanonicalTerminalSnapshot",
+    "CanonicalAccessibilityNode",
+    "CanonicalDesktopSnapshot",
+    # Canonicalization utilities
+    "normalize_text",
+    "normalize_command",
+    "strip_ansi",
+    "normalize_timestamps",
+    "normalize_transcript",
+    "normalize_path",
+    "is_secret_key",
+    "hash_environment",
+    "sha256",
+    # Terminal canonicalization
+    "canonicalize_terminal_snapshot",
+    "compute_terminal_state_hash",
+    "TERMINAL_SCHEMA_VERSION",
+    # Desktop canonicalization
+    "canonicalize_accessibility_node",
+    "build_focused_path",
+    "canonicalize_desktop_snapshot",
+    "compute_desktop_state_hash",
+    "DESKTOP_SCHEMA_VERSION",
 ]
