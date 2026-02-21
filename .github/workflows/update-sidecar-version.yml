@@ -64,7 +64,7 @@ jobs:
         working-directory: predicate_authority_sidecar
         env:
           TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN_PREDICATE_AUTHORITY }}
         run: |
           echo "Publishing predicate-authority-sidecar to PyPI..."
           twine upload dist/* --skip-existing
