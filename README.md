@@ -66,6 +66,19 @@ This SDK requires the **Predicate Authority Sidecar** daemon to be running. The 
 
 ### Quick Sidecar Setup
 
+**Option A: Install with sidecar (recommended)**
+
+```bash
+# Install SDK with automatic sidecar download
+pip install predicate-authority[sidecar]
+
+# The sidecar binary is downloaded automatically on first use
+# Or manually trigger download:
+predicate-download-sidecar
+```
+
+**Option B: Manual download**
+
 ```bash
 # Download the latest release for your platform
 # Linux x64, macOS x64/ARM64, Windows x64 available
@@ -78,10 +91,30 @@ chmod +x predicate-authorityd
 ./predicate-authorityd run --port 8787 --mode local_only --policy-file policy.json
 ```
 
+### Running the sidecar from Python
+
+```python
+from predicate_authority import run_sidecar, is_sidecar_available, download_sidecar
+
+# Download if not available
+if not is_sidecar_available():
+    download_sidecar()
+
+# Run sidecar as subprocess
+process = run_sidecar(port=8787, policy_file="policy.json")
+
+# Later: graceful shutdown
+process.terminate()
+process.wait()
+```
+
 ## Installation
 
 ```bash
 pip install predicate-authority
+
+# Or with sidecar binary:
+pip install predicate-authority[sidecar]
 ```
 
 For local editable development in this monorepo, install both package roots

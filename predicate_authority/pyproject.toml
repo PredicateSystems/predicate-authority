@@ -23,6 +23,10 @@ dependencies = [
 
 [project.optional-dependencies]
 telemetry = ["opentelemetry-api>=1.24.0"]
+sidecar = ["predicate-authority-sidecar"]
+
+[project.scripts]
+predicate-download-sidecar = "predicate_authority.sidecar_binary:_cli_download"
 
 [project.urls]
 Documentation = "https://www.PredicateSystems.ai/docs"
