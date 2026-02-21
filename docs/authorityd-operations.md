@@ -26,7 +26,7 @@ Binary location after install:
 
 ### Option B: Download binary directly
 
-Download pre-built binaries from [GitHub Releases](https://github.com/PredicateSystems/predicate-authority-sidecar/releases):
+Download pre-built binaries from [GitHub Releases](https://github.com/PredicateSystems/rust-predicate-authorityd/releases):
 
 | Platform | Binary |
 |----------|--------|
@@ -38,7 +38,7 @@ Download pre-built binaries from [GitHub Releases](https://github.com/PredicateS
 
 ```bash
 # Example: macOS ARM64
-curl -LO https://github.com/PredicateSystems/predicate-authority-sidecar/releases/latest/download/predicate-authorityd-darwin-arm64.tar.gz
+curl -LO https://github.com/PredicateSystems/rust-predicate-authorityd/releases/latest/download/predicate-authorityd-darwin-arm64.tar.gz
 tar -xzf predicate-authorityd-darwin-arm64.tar.gz
 chmod +x predicate-authorityd
 ./predicate-authorityd --version
