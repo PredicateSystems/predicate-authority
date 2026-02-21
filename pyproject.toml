@@ -61,7 +61,7 @@ exclude = [
 
 [tool.bandit]
 exclude_dirs = ["tests", "venv", ".venv", "build", "dist"]
-skips = ["B101", "B601"]
+skips = ["B101", "B601", "B404"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

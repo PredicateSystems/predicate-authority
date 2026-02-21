@@ -2,6 +2,67 @@
 
 This guide shows how to run the local sidecar daemon, provide a policy file, and verify health/status endpoints.
 
+---
+
+## Sidecar Installation
+
+The sidecar (`predicate-authorityd`) is a lightweight Rust binary that handles policy evaluation and mandate signing.
+
+### Option A: Install via pip (recommended for Python users)
+
+```bash
+# Install SDK with sidecar extra - downloads binary automatically
+pip install predicate-authority[sidecar]
+
+# Or manually trigger download after installing core SDK
+pip install predicate-authority
+predicate-download-sidecar
+```
+
+Binary location after install:
+- macOS: `~/Library/Application Support/predicate-authority/bin/predicate-authorityd`
+- Linux: `~/.local/share/predicate-authority/bin/predicate-authorityd`
+- Windows: `%LOCALAPPDATA%/predicate-authority/bin/predicate-authorityd.exe`
+
+### Option B: Download binary directly
+
+Download pre-built binaries from [GitHub Releases](https://github.com/PredicateSystems/predicate-authority-sidecar/releases):
+
+| Platform | Binary |
+|----------|--------|
+| macOS ARM64 (Apple Silicon) | `predicate-authorityd-darwin-arm64.tar.gz` |
+| macOS x64 (Intel) | `predicate-authorityd-darwin-x64.tar.gz` |
+| Linux x64 | `predicate-authorityd-linux-x64.tar.gz` |
+| Linux ARM64 | `predicate-authorityd-linux-arm64.tar.gz` |
+| Windows x64 | `predicate-authorityd-windows-x64.zip` |
+
+```bash
+# Example: macOS ARM64
+curl -LO https://github.com/PredicateSystems/predicate-authority-sidecar/releases/latest/download/predicate-authorityd-darwin-arm64.tar.gz
+tar -xzf predicate-authorityd-darwin-arm64.tar.gz
+chmod +x predicate-authorityd
+./predicate-authorityd --version
+```
+
+### Option C: Use from Python code
+
+```python
+from predicate_authority import run_sidecar, is_sidecar_available, download_sidecar
+
+# Download if needed
+if not is_sidecar_available():
+    download_sidecar()
+
+# Start as subprocess
+process = run_sidecar(port=8787, policy_file="policy.json")
+
+# Graceful shutdown
+process.terminate()
+process.wait()
+```
+
+---
+
 ## 1) Sample `policy.json`
 
 Create `examples/authorityd/policy.json`:
@@ -31,87 +92,68 @@ Create `examples/authorityd/policy.json`:
 
 ## 2) Start the daemon
 
-Run from repo root:
+### Basic local mode
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --policy-poll-interval-s 2.0 \
-  --credential-store-file ./.predicate-authorityd/credentials.json
+  --policy-file policy.json
 ```
 
-By design, mandate/revocation cache is in-memory (ephemeral) unless you explicitly
-enable persistence with `--mandate-store-file`.
-
-### Optional: enable persisted mandate/revocation cache (parity extension)
-
-Use this only when restart-recovery for local revocations/mandate lineage is required.
-If omitted, default behavior remains ephemeral.
+### With local identity registry
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --mandate-store-file ./.predicate-authorityd/mandates.json
+  --policy-file policy.json \
+  --identity-file ./local-identities.json
 ```
 
-### Optional: enable control-plane shipping
+### Cloud-connected mode (control-plane sync)
 
-To automatically ship proof events and usage records to
-`predicate-authority-control-plane`, set:
-
-```bash
-export CONTROL_PLANE_URL="http://127.0.0.1:8080"
-export CONTROL_PLANE_TENANT_ID="dev-tenant"
-export CONTROL_PLANE_PROJECT_ID="dev-project"
-export CONTROL_PLANE_API_KEY="<bearer-token>"
-
-PYTHONPATH=. predicate-authorityd \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --control-plane-enabled \
-  --control-plane-fail-open
-```
-
-### Optional: enable long-poll policy/revocation sync from control-plane
-
-Use this when running `cloud_connected` mode and you want active policy/revocation
-updates pushed through long-poll sync instead of waiting for file-based policy polling.
+Connect to Predicate Authority control-plane for policy sync, revocation push, and audit forwarding:
 
 ```bash
-export CONTROL_PLANE_URL="http://127.0.0.1:8080"
-export CONTROL_PLANE_TENANT_ID="dev-tenant"
-export CONTROL_PLANE_PROJECT_ID="dev-project"
-export CONTROL_PLANE_API_KEY="<bearer-token>"
+export PREDICATE_API_KEY="your-api-key"
 
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode cloud_connected \
-  --policy-file examples/authorityd/policy.json \
-  --control-plane-enabled \
-  --control-plane-sync-enabled \
-  --control-plane-sync-project-id "$CONTROL_PLANE_PROJECT_ID" \
-  --control-plane-sync-environment "prod" \
-  --control-plane-sync-wait-timeout-s 15 \
-  --control-plane-sync-poll-interval-ms 200
+  --policy-file policy.json \
+  --control-plane-url https://api.predicatesystems.dev \
+  --tenant-id your-tenant \
+  --project-id your-project \
+  --predicate-api-key $PREDICATE_API_KEY \
+  --sync-enabled
 ```
 
-Quick checks:
+### Local IdP mode (development/air-gapped)
+
+For development or air-gapped environments without external IdP:
 
 ```bash
-# daemon sync health counters
-curl -s http://127.0.0.1:8787/status | jq '.control_plane_sync_poll_count, .control_plane_sync_update_count, .control_plane_sync_error_count, .control_plane_last_sync_error'
+export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
 
-# daemon metrics includes control-plane sync counters
-curl -s http://127.0.0.1:8787/metrics | rg "predicate_authority_control_plane_sync_total"
+./predicate-authorityd run \
+  --host 127.0.0.1 \
+  --port 8787 \
+  --mode local_only \
+  --policy-file policy.json \
+  --identity-mode local-idp \
+  --local-idp-issuer "http://localhost/predicate-local-idp" \
+  --local-idp-audience "api://predicate-authority"
+```
+
+Quick health checks:
+
+```bash
+curl -s http://127.0.0.1:8787/health | jq
+curl -s http://127.0.0.1:8787/status | jq
 ```
 
 ### Signing key safety note (required until mandate `v2` claims)

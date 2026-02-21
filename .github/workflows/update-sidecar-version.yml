@@ -1,0 +1,107 @@
+name: Update Sidecar Version Reference
+
+on:
+  repository_dispatch:
+    types: [sidecar-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Sidecar version tag (e.g., v0.1.0)'
+        required: true
+        type: string
+      publish_sidecar_package:
+        description: 'Publish predicate-authority-sidecar to PyPI'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  update-and-publish:
+    name: Update sidecar version and optionally publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            VERSION="${{ github.event.client_payload.version }}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          # Remove 'v' prefix for Python package version
+          PY_VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "py_version=$PY_VERSION" >> $GITHUB_OUTPUT
+          echo "Sidecar version: $VERSION (Python: $PY_VERSION)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Update sidecar package version
+        run: |
+          PY_VERSION="${{ steps.version.outputs.py_version }}"
+          sed -i "s/version = \".*\"/version = \"$PY_VERSION\"/" predicate_authority_sidecar/pyproject.toml
+          echo "Updated predicate-authority-sidecar to version $PY_VERSION"
+          cat predicate_authority_sidecar/pyproject.toml
+
+      - name: Build sidecar package
+        working-directory: predicate_authority_sidecar
+        run: python -m build
+
+      - name: Publish to PyPI (if requested or on dispatch)
+        if: github.event_name == 'repository_dispatch' || inputs.publish_sidecar_package
+        working-directory: predicate_authority_sidecar
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          echo "Publishing predicate-authority-sidecar to PyPI..."
+          twine upload dist/* --skip-existing
+
+      - name: Commit version update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add predicate_authority_sidecar/pyproject.toml
+          git commit -m "chore: update sidecar package to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git push
+
+      - name: Create notification issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.version.outputs.version }}';
+            const pyVersion = '${{ steps.version.outputs.py_version }}';
+            const releaseUrl = '${{ github.event.client_payload.release_url || 'N/A' }}';
+            const published = '${{ github.event_name }}' === 'repository_dispatch' || '${{ inputs.publish_sidecar_package }}' === 'true';
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Sidecar ${version} released`,
+              body: `A new version of the Predicate Authority sidecar has been released.\n\n` +
+                    `**Sidecar Version:** ${version}\n` +
+                    `**Release:** ${releaseUrl}\n\n` +
+                    `**Python Package:** predicate-authority-sidecar ${pyVersion}\n` +
+                    `**Published to PyPI:** ${published ? 'Yes' : 'No'}\n\n` +
+                    `## Installation\n\n` +
+                    `\`\`\`bash\n` +
+                    `pip install predicate-authority[sidecar]\n` +
+                    `\`\`\`\n\n` +
+                    `Or download manually:\n` +
+                    `\`\`\`bash\n` +
+                    `predicate-download-sidecar --version ${version}\n` +
+                    `\`\`\``,
+              labels: ['sidecar-release', 'automated']
+            });

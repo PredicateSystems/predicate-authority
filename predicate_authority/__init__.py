@@ -47,6 +47,13 @@ from predicate_authority.policy import PolicyEngine, PolicyMatchResult
 from predicate_authority.policy_source import PolicyFileSource, PolicyReloadResult
 from predicate_authority.proof import InMemoryProofLedger
 from predicate_authority.revocation import LocalRevocationCache
+from predicate_authority.sidecar_binary import (
+    download_sidecar,
+    get_sidecar_path,
+    get_sidecar_version,
+    is_sidecar_available,
+    run_sidecar,
+)
 from predicate_authority.telemetry import OpenTelemetryTraceEmitter
 
 __all__ = [
@@ -94,4 +101,10 @@ __all__ = [
     "run_entra_obo_compatibility_check",
     "run_okta_obo_compatibility_check",
     "run_oidc_token_exchange_compatibility_check",
+    # Sidecar binary utilities
+    "download_sidecar",
+    "get_sidecar_path",
+    "get_sidecar_version",
+    "is_sidecar_available",
+    "run_sidecar",
 ]

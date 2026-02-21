@@ -25,16 +25,21 @@ Core use cases:
 ## Package overview
 
 - `predicate_contracts`: shared typed contracts and protocols.
-- `predicate_authority`: policy engine, guard, sidecar, identity bridge,
-  revocation, proof ledger.
-- `predicate-authorityd`: optional local sidecar daemon (CLI service).
+- `predicate_authority`: policy engine, guard, identity bridge, revocation, proof ledger.
+- `predicate-authorityd`: Rust-based sidecar daemon for policy evaluation and mandate signing.
 
 ---
 
 ## Install
 
+### Python SDK
+
 ```bash
-pip install predicate-contracts predicate-authority
+# Core SDK only
+pip install predicate-authority
+
+# SDK with automatic sidecar binary download
+pip install predicate-authority[sidecar]
 ```
 
 For local development from source:
@@ -44,6 +49,65 @@ cd /path/to/AgentIdentity
 pip install -e ./predicate_contracts
 pip install -e ./predicate_authority
 ```
+
+### Sidecar Installation
+
+The sidecar is a lightweight Rust binary that handles policy evaluation and mandate signing.
+
+**Option A: Automatic download with pip (recommended)**
+
+```bash
+# Install SDK with sidecar extra
+pip install predicate-authority[sidecar]
+
+# The binary downloads automatically on first use, or trigger manually:
+predicate-download-sidecar
+```
+
+**Option B: Programmatic download**
+
+```python
+from predicate_authority import download_sidecar, is_sidecar_available
+
+if not is_sidecar_available():
+    download_sidecar()  # Downloads latest version
+    # Or specify version:
+    # download_sidecar(version="v0.1.0")
+```
+
+**Option C: Manual binary download**
+
+Download pre-built binaries from [GitHub Releases](https://github.com/PredicateSystems/predicate-authority-sidecar/releases):
+
+| Platform | Binary |
+|----------|--------|
+| macOS ARM64 (Apple Silicon) | `predicate-authorityd-darwin-arm64.tar.gz` |
+| macOS x64 (Intel) | `predicate-authorityd-darwin-x64.tar.gz` |
+| Linux x64 | `predicate-authorityd-linux-x64.tar.gz` |
+| Linux ARM64 | `predicate-authorityd-linux-arm64.tar.gz` |
+| Windows x64 | `predicate-authorityd-windows-x64.zip` |
+
+```bash
+# Download and extract (example for macOS ARM64)
+curl -LO https://github.com/PredicateSystems/predicate-authority-sidecar/releases/latest/download/predicate-authorityd-darwin-arm64.tar.gz
+tar -xzf predicate-authorityd-darwin-arm64.tar.gz
+chmod +x predicate-authorityd
+
+# Verify installation
+./predicate-authorityd --version
+```
+
+### Binary locations
+
+When installed via `pip install predicate-authority[sidecar]`, binaries are placed in:
+
+| Platform | Location |
+|----------|----------|
+| macOS | `~/Library/Application Support/predicate-authority/bin/` |
+| Linux | `~/.local/share/predicate-authority/bin/` |
+| Windows | `%LOCALAPPDATA%/predicate-authority/bin/` |
+
+You can also set `PREDICATE_SIDECAR_PATH` environment variable to use a custom binary location
 
 ---
 
@@ -175,17 +239,40 @@ Common deny reasons:
 
 ## Using the sidecar (`predicate-authorityd`)
 
-Start local sidecar with file policy:
+### Starting the sidecar
+
+**Option A: Using Python helper (if installed via pip)**
+
+```python
+from predicate_authority import run_sidecar, is_sidecar_available, download_sidecar
+
+# Download if not available
+if not is_sidecar_available():
+    download_sidecar()
+
+# Start sidecar as subprocess
+process = run_sidecar(
+    port=8787,
+    mode="local_only",
+    policy_file="policy.json",
+)
+
+# Later: graceful shutdown
+process.terminate()
+process.wait()
+```
+
+**Option B: Direct binary execution**
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file examples/authorityd/policy.json
+  --policy-file policy.json
 ```
 
-Health and status:
+### Health and status
 
 ```bash
 curl -s http://127.0.0.1:8787/health | jq
@@ -207,11 +294,12 @@ Example (`local-idp`):
 
 ```bash
 export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
-predicate-authorityd \
+
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file examples/authorityd/policy.json \
+  --policy-file policy.json \
   --identity-mode local-idp \
   --local-idp-issuer "http://localhost/predicate-local-idp" \
   --local-idp-audience "api://predicate-authority"
@@ -387,18 +475,12 @@ Expected delegation path output:
 Enable ephemeral task identity registry and local ledger queue:
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd run \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --local-identity-enabled \
-  --local-identity-registry-file ./.predicate-authorityd/local-identities.json \
-  --local-identity-default-ttl-s 900 \
-  --flush-worker-enabled \
-  --flush-worker-interval-s 2.0 \
-  --flush-worker-max-batch-size 50 \
-  --flush-worker-dead-letter-max-attempts 5
+  --policy-file policy.json \
+  --identity-file ./local-identities.json
 ```
 
 Useful endpoints:
@@ -447,13 +529,16 @@ If you run `predicate-authorityd` with control-plane enabled, you can also enabl
 long-poll sync to pull policy/revocation updates continuously:
 
 ```bash
-predicate-authorityd \
+export PREDICATE_API_KEY="your-api-key"
+
+./predicate-authorityd run \
   --mode cloud_connected \
-  --policy-file examples/authorityd/policy.json \
-  --control-plane-enabled \
-  --control-plane-sync-enabled \
-  --control-plane-sync-project-id "dev-project" \
-  --control-plane-sync-environment "prod"
+  --policy-file policy.json \
+  --control-plane-url https://api.predicatesystems.dev \
+  --tenant-id your-tenant \
+  --project-id your-project \
+  --predicate-api-key $PREDICATE_API_KEY \
+  --sync-enabled
 ```
 
 Check sync counters from daemon:
