@@ -11,12 +11,15 @@ The sidecar (`predicate-authorityd`) is a lightweight Rust binary that handles p
 ### Option A: Install via pip (recommended for Python users)
 
 ```bash
-# Install SDK with sidecar extra - downloads binary automatically
-pip install predicate-authority[sidecar]
+# Install SDK with sidecar extra (use quotes for zsh compatibility)
+pip install "predicate-authority[sidecar]"
 
-# Or manually trigger download after installing core SDK
-pip install predicate-authority
+# IMPORTANT: The binary is NOT downloaded automatically during pip install.
+# You must manually download it:
 predicate-download-sidecar
+
+# Or download a specific version:
+predicate-download-sidecar --version v0.3.8
 ```
 
 Binary location after install:
@@ -63,6 +66,68 @@ process.wait()
 
 ---
 
+## Sidecar CLI Reference
+
+**IMPORTANT:** CLI arguments must be placed **before** the `run` subcommand.
+
+```
+GLOBAL OPTIONS (use before 'run'):
+  -c, --config <FILE>           Path to TOML config file [env: PREDICATE_CONFIG]
+      --host <HOST>             Host to bind to [env: PREDICATE_HOST] [default: 127.0.0.1]
+      --port <PORT>             Port to bind to [env: PREDICATE_PORT] [default: 8787]
+      --mode <MODE>             local_only or cloud_connected [env: PREDICATE_MODE]
+      --policy-file <PATH>      Path to policy JSON [env: PREDICATE_POLICY_FILE]
+      --identity-file <PATH>    Path to local identity registry [env: PREDICATE_IDENTITY_FILE]
+      --log-level <LEVEL>       trace, debug, info, warn, error [env: PREDICATE_LOG_LEVEL]
+      --control-plane-url <URL> Control-plane URL [env: PREDICATE_CONTROL_PLANE_URL]
+      --tenant-id <ID>          Tenant ID [env: PREDICATE_TENANT_ID]
+      --project-id <ID>         Project ID [env: PREDICATE_PROJECT_ID]
+      --predicate-api-key <KEY> API key [env: PREDICATE_API_KEY]
+      --sync-enabled            Enable control-plane sync [env: PREDICATE_SYNC_ENABLED]
+      --fail-open               Fail open if control-plane unreachable [env: PREDICATE_FAIL_OPEN]
+
+IDENTITY PROVIDER OPTIONS:
+      --identity-mode <MODE>    local, local-idp, oidc, entra, or okta [env: PREDICATE_IDENTITY_MODE]
+      --allow-local-fallback    Allow local/local-idp in cloud_connected mode [env: PREDICATE_ALLOW_LOCAL_FALLBACK]
+      --idp-token-ttl-s <SECS>  IdP token TTL seconds [env: PREDICATE_IDP_TOKEN_TTL_S] [default: 300]
+      --mandate-ttl-s <SECS>    Mandate TTL seconds [env: PREDICATE_MANDATE_TTL_S] [default: 300]
+
+LOCAL IDP OPTIONS (for identity-mode=local-idp):
+      --local-idp-issuer <URL>  Issuer URL [env: LOCAL_IDP_ISSUER]
+      --local-idp-audience <AUD> Audience [env: LOCAL_IDP_AUDIENCE]
+      --local-idp-signing-key-env <VAR> Env var for signing key [default: LOCAL_IDP_SIGNING_KEY]
+
+OIDC OPTIONS (for identity-mode=oidc):
+      --oidc-issuer <URL>       Issuer URL [env: OIDC_ISSUER]
+      --oidc-client-id <ID>     Client ID [env: OIDC_CLIENT_ID]
+      --oidc-audience <AUD>     Audience [env: OIDC_AUDIENCE]
+
+ENTRA OPTIONS (for identity-mode=entra):
+      --entra-tenant-id <ID>    Tenant ID [env: ENTRA_TENANT_ID]
+      --entra-client-id <ID>    Client ID [env: ENTRA_CLIENT_ID]
+      --entra-audience <AUD>    Audience [env: ENTRA_AUDIENCE]
+
+OKTA OPTIONS (for identity-mode=okta):
+      --okta-issuer <URL>       Issuer URL [env: OKTA_ISSUER]
+      --okta-client-id <ID>     Client ID [env: OKTA_CLIENT_ID]
+      --okta-audience <AUD>     Audience [env: OKTA_AUDIENCE]
+      --okta-required-claims <CLAIMS> Required claims (comma-separated) [env: OKTA_REQUIRED_CLAIMS]
+      --okta-required-scopes <SCOPES> Required scopes (comma-separated) [env: OKTA_REQUIRED_SCOPES]
+      --okta-required-roles <ROLES> Required roles/groups (comma-separated) [env: OKTA_REQUIRED_ROLES]
+      --okta-allowed-tenants <IDS> Allowed tenant IDs (comma-separated) [env: OKTA_ALLOWED_TENANTS]
+      --okta-tenant-claim <NAME> Claim for tenant ID [env: OKTA_TENANT_CLAIM] [default: tenant_id]
+      --okta-scope-claim <NAME> Claim for scopes [env: OKTA_SCOPE_CLAIM] [default: scope]
+      --okta-role-claim <NAME>  Claim for roles [env: OKTA_ROLE_CLAIM] [default: groups]
+
+COMMANDS:
+  run          Start the daemon (default)
+  init-config  Generate example config file
+  check-config Validate config file
+  version      Show version info
+```
+
+---
+
 ## 1) Sample `policy.json`
 
 Create `examples/authorityd/policy.json`:
@@ -95,22 +160,45 @@ Create `examples/authorityd/policy.json`:
 ### Basic local mode
 
 ```bash
-./predicate-authorityd run \
+./predicate-authorityd \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
-  --policy-file policy.json
+  --policy-file policy.json \
+  run
+```
+
+### Using environment variables
+
+```bash
+export PREDICATE_HOST=127.0.0.1
+export PREDICATE_PORT=8787
+export PREDICATE_MODE=local_only
+export PREDICATE_POLICY_FILE=policy.json
+
+./predicate-authorityd run
+```
+
+### Using a config file
+
+```bash
+# Generate example config
+./predicate-authorityd init-config --output config.toml
+
+# Run with config
+./predicate-authorityd --config config.toml run
 ```
 
 ### With local identity registry
 
 ```bash
-./predicate-authorityd run \
+./predicate-authorityd \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
   --policy-file policy.json \
-  --identity-file ./local-identities.json
+  --identity-file ./local-identities.json \
+  run
 ```
 
 ### Cloud-connected mode (control-plane sync)
@@ -120,7 +208,7 @@ Connect to Predicate Authority control-plane for policy sync, revocation push, a
 ```bash
 export PREDICATE_API_KEY="your-api-key"
 
-./predicate-authorityd run \
+./predicate-authorityd \
   --host 127.0.0.1 \
   --port 8787 \
   --mode cloud_connected \
@@ -128,25 +216,9 @@ export PREDICATE_API_KEY="your-api-key"
   --control-plane-url https://api.predicatesystems.dev \
   --tenant-id your-tenant \
   --project-id your-project \
-  --predicate-api-key $PREDICATE_API_KEY \
-  --sync-enabled
-```
-
-### Local IdP mode (development/air-gapped)
-
-For development or air-gapped environments without external IdP:
-
-```bash
-export LOCAL_IDP_SIGNING_KEY="replace-with-strong-secret"
-
-./predicate-authorityd run \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --mode local_only \
-  --policy-file policy.json \
-  --identity-mode local-idp \
-  --local-idp-issuer "http://localhost/predicate-local-idp" \
-  --local-idp-audience "api://predicate-authority"
+  --predicate-api-key "$PREDICATE_API_KEY" \
+  --sync-enabled \
+  run
 ```
 
 Quick health checks:
@@ -154,24 +226,6 @@ Quick health checks:
 ```bash
 curl -s http://127.0.0.1:8787/health | jq
 curl -s http://127.0.0.1:8787/status | jq
-```
-
-### Signing key safety note (required until mandate `v2` claims)
-
-Until mandate `v2` introduces explicit `iss`/`aud` claims and asymmetric signing defaults,
-each deployment instance must use a unique signing key to reduce cross-instance replay risk.
-
-Recommended startup pattern:
-
-```bash
-export PREDICATE_AUTHORITY_SIGNING_KEY="<unique-random-per-instance>"
-
-PYTHONPATH=. predicate-authorityd \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --mode local_only \
-  --policy-file examples/authorityd/policy.json \
-  --mandate-signing-key-env PREDICATE_AUTHORITY_SIGNING_KEY
 ```
 
 ## 2b) Okta production hardening checklist + staging matrix
@@ -431,10 +485,11 @@ export OKTA_AUDIENCE="api://predicate-authority"
 Start daemon in Okta mode:
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd \
   --host 127.0.0.1 \
   --port 8787 \
   --mode cloud_connected \
+  --policy-file examples/authorityd/policy.json \
   --identity-mode okta \
   --okta-issuer "$OKTA_ISSUER" \
   --okta-client-id "$OKTA_CLIENT_ID" \
@@ -445,7 +500,7 @@ PYTHONPATH=. predicate-authorityd \
   --okta-allowed-tenants "tenant-a" \
   --idp-token-ttl-s 300 \
   --mandate-ttl-s 300 \
-  --policy-file examples/authorityd/policy.json
+  run
 ```
 
 Safety gate note:
@@ -468,22 +523,19 @@ If Okta integration causes broad auth failures, use this rollback sequence:
 
 ## 3b) Optional local identity registry (ephemeral task identities)
 
-Enable local identity support:
+Enable local identity support with local-idp mode:
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+./predicate-authorityd \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
   --policy-file examples/authorityd/policy.json \
+  --identity-file ./.predicate-authorityd/local-identities.json \
   --identity-mode local-idp \
-  --local-identity-enabled \
-  --local-identity-registry-file ./.predicate-authorityd/local-identities.json \
-  --local-identity-default-ttl-s 900 \
-  --flush-worker-enabled \
-  --flush-worker-interval-s 2.0 \
-  --flush-worker-max-batch-size 50 \
-  --flush-worker-dead-letter-max-attempts 5
+  --local-idp-issuer "http://localhost/predicate-local-idp" \
+  --local-idp-audience "api://predicate-authority" \
+  run
 ```
 
 Issue an ephemeral identity:
