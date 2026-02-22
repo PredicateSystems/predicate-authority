@@ -7,6 +7,19 @@
 [![PyPI - predicate-contracts](https://img.shields.io/pypi/v/predicate-contracts.svg)](https://pypi.org/project/predicate-contracts/)
 [![Release Tag](https://img.shields.io/badge/release-vX.Y.Z-blue)](docs/pypi-release-guide.md)
 
+<table>
+<tr>
+<td width="50%" align="center">
+<strong>OpenClaw Agent Tool Calls</strong><br>
+<video src="https://github.com/user-attachments/assets/0fdf1ebb-6044-4288-9613-cd46f98cc284" autoplay loop muted playsinline></video>
+</td>
+<td width="50%" align="center">
+<strong>Temporal Workflows</strong><br>
+<video src="https://github.com/user-attachments/assets/511b6d38-90ab-413e-8af6-a89fc459eea5" autoplay loop muted playsinline></video>
+</td>
+</tr>
+</table>
+
 `predicate-authority` is a production-grade pre-execution authority layer that binds AI agent identity to deterministic state. It bridges standard IdPs (Entra ID, Okta, OIDC) with runtime verification so every sensitive action is authorized, bounded, and provable.
 
 ## Why Predicate Authority?
