@@ -696,13 +696,45 @@ export PREDICATE_TUI_REFRESH_MS=50
 | `G` | Jump to oldest event (bottom) |
 | `P` | Pause/resume live updates |
 | `?` | Toggle help overlay |
+| `f` | Cycle filter: ALL → DENY → agent input |
+| `/` | Filter by agent ID (type + Enter) |
+| `c` | Clear filter (show all) |
+
+### Live Filtering
+
+When an agent spams the event list with hundreds of `[ ✓ ALLOW ]` events, use filtering to focus:
+
+- Press `f` once to show only DENY events
+- Press `f` twice (or `/`) to filter by agent ID (partial match)
+- Press `c` to clear filter and show all events
+
+The current filter appears in the header: `FILTER: DENY` or `FILTER: agent-name`
+
+### Audit Mode
+
+Run in audit mode to log decisions without blocking:
+
+```bash
+# Enable via CLI flag
+./predicate-authorityd --audit-mode --policy-file policy.json dashboard
+
+# Or use audit-only policy (auto-detected from filename)
+./predicate-authorityd --policy-file policies/audit-only.json dashboard
+```
+
+In audit mode:
+- Header shows `[AUDIT]` instead of `[LIVE]`
+- Blocked events display `[ ⚠ WOULD DENY ]` in yellow instead of `[ ✗ DENY ]` in red
+- Border of LIVE AUTHORITY GATE turns yellow
 
 ### Dashboard Features
 
 - **Live Authority Gate**: Real-time scrolling list of ALLOW/DENY decisions with agent IDs, actions, resources, mandate IDs, and latency
+- **Live Filtering**: Filter events by DENY-only or agent ID to focus on what matters
+- **Audit Mode**: Visual indicator when running in dry-run mode
 - **Metrics Panel**: Total requests, allowed/denied counts with percentages, throughput (req/s), average latency
 - **Token Context Savings**: Estimated tokens saved by blocking unauthorized actions early
-- **Status Indicators**: LIVE/PAUSED status, scroll position, uptime
+- **Status Indicators**: LIVE/PAUSED/AUDIT status, scroll position, filter, uptime
 
 ### Session Summary
 
