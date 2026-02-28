@@ -119,11 +119,89 @@ OKTA OPTIONS (for identity-mode=okta):
       --okta-scope-claim <NAME> Claim for scopes [env: OKTA_SCOPE_CLAIM] [default: scope]
       --okta-role-claim <NAME>  Claim for roles [env: OKTA_ROLE_CLAIM] [default: groups]
 
+SECURITY HARDENING OPTIONS (Phase 5):
+      --disable-ssrf-protection   Disable built-in SSRF protection [env: PREDICATE_DISABLE_SSRF]
+      --require-signed-policy     Require Ed25519 signed policy files [env: PREDICATE_REQUIRE_SIGNED_POLICY]
+      --policy-signing-key <HEX>  Ed25519 public key for policy verification [env: PREDICATE_POLICY_SIGNING_KEY]
+      --loop-guard-threshold <N>  Consecutive failures before blocking (default: 5) [env: PREDICATE_LOOP_GUARD_THRESHOLD]
+      --loop-guard-window-s <S>   Time window for failure counting (default: 60) [env: PREDICATE_LOOP_GUARD_WINDOW_S]
+
 COMMANDS:
   run          Start the daemon (default)
   init-config  Generate example config file
   check-config Validate config file
   version      Show version info
+```
+
+---
+
+## Security Features (Phase 5)
+
+The sidecar includes built-in security hardening features:
+
+### SSRF Protection
+
+Blocks requests to internal network resources, cloud metadata endpoints, and other sensitive targets:
+
+- **Private IP Ranges**: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+- **Link-local**: 169.254.0.0/16
+- **Localhost**: 127.0.0.0/8, localhost, ::1
+- **Cloud Metadata Endpoints**: AWS (169.254.169.254), GCP, Azure, Kubernetes
+- **Internal DNS**: *.internal, *.local, *.localhost, *.corp, *.lan
+
+SSRF protection is **enabled by default**. To disable (not recommended):
+
+```bash
+./predicate-authorityd --disable-ssrf-protection --policy-file policy.json run
+```
+
+### Policy Signature Verification (Enterprise)
+
+Require Ed25519-signed policy files to prevent local policy tampering:
+
+```bash
+# Generate a keypair (one-time setup)
+# Private key stays on control plane, public key goes to sidecars
+
+./predicate-authorityd \
+  --require-signed-policy \
+  --policy-signing-key "a1b2c3d4e5f6..." \
+  --policy-file signed-policy.json \
+  run
+```
+
+Signed policy file format:
+```json
+{
+  "policy": { "rules": [...] },
+  "signature": "<base64-ed25519-signature>"
+}
+```
+
+### Loop Guard (Retry Limiting)
+
+Prevents runaway agents from infinitely retrying failed actions:
+
+```bash
+./predicate-authorityd \
+  --loop-guard-threshold 5 \
+  --loop-guard-window-s 60 \
+  --policy-file policy.json \
+  run
+```
+
+After 5 consecutive failures for the same (principal, action, resource) tuple within 60 seconds, further requests are blocked with `LOOP_GUARD_TRIGGERED`.
+
+### Merkle Hash Chain (Audit Integrity)
+
+The proof ledger uses SHA-256 hash chaining for tamper-evident audit trails. Verify chain integrity:
+
+```bash
+# Get current chain head
+curl -s http://127.0.0.1:8787/ledger/chain-head | jq
+
+# Verify chain integrity
+curl -s http://127.0.0.1:8787/ledger/verify | jq
 ```
 
 ---

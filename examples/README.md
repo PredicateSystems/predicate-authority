@@ -22,7 +22,7 @@ PYTHONPATH=. python examples/outbound_http_guard_example.py
 Start daemon:
 
 ```bash
-PYTHONPATH=. predicate-authorityd \
+predicate-authorityd \
   --host 127.0.0.1 \
   --port 8787 \
   --mode local_only \
