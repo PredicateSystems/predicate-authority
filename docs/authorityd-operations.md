@@ -639,3 +639,103 @@ Example response:
 ## 5) Stop daemon
 
 Press `Ctrl+C` in the daemon terminal.
+
+---
+
+## 6) Terminal Dashboard (TUI)
+
+The sidecar includes an interactive terminal user interface for real-time monitoring of authorization decisions.
+
+### Starting the Dashboard
+
+```bash
+./predicate-authorityd --policy-file policy.json dashboard
+```
+
+Or set a custom refresh rate (default 100ms):
+
+```bash
+export PREDICATE_TUI_REFRESH_MS=50
+./predicate-authorityd --policy-file policy.json dashboard
+```
+
+### Dashboard Layout
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  PREDICATE AUTHORITY v0.4.1    MODE: strict  [LIVE]  UPTIME: 2h 34m  [?]  │
+│  Policy: loaded                Rules: 12 active      [Q:quit P:pause]     │
+├─────────────────────────────────────────┬──────────────────────────────────┤
+│  LIVE AUTHORITY GATE [1/47]             │  METRICS                         │
+│                                         │                                  │
+│  [ ✓ ALLOW ] agent:web                  │  Total Requests:    1,870        │
+│    browser.navigate → github.com        │  ├─ Allowed:        1,847 (98.8%)│
+│    m_7f3a2b1c | 0.4ms                   │  └─ Blocked:           23  (1.2%)│
+│                                         │                                  │
+│  [ ✗ DENY  ] agent:scraper              │  Throughput:        12.3 req/s   │
+│    fs.write → ~/.ssh/config             │  Avg Latency:       0.8ms        │
+│    EXPLICIT_DENY | 0.2ms                │                                  │
+│                                         │  ──────────────────────────────  │
+│  [ ✓ ALLOW ] agent:worker               │  TOKEN CONTEXT SAVED             │
+│    browser.click → button#checkout      │  ──────────────────────────────  │
+│    m_9c2d4e5f | 0.6ms                   │  Blocked early:     23 actions   │
+│                                         │  Est. tokens saved: ~4,140       │
+├─────────────────────────────────────────┴──────────────────────────────────┤
+│  Generated 47 proofs this session. Run `predicate login` to sync to vault.│
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Q` / `Esc` | Quit dashboard |
+| `j` / `↓` | Scroll down event list |
+| `k` / `↑` | Scroll up event list |
+| `g` | Jump to newest event (top) |
+| `G` | Jump to oldest event (bottom) |
+| `P` | Pause/resume live updates |
+| `?` | Toggle help overlay |
+
+### Dashboard Features
+
+- **Live Authority Gate**: Real-time scrolling list of ALLOW/DENY decisions with agent IDs, actions, resources, mandate IDs, and latency
+- **Metrics Panel**: Total requests, allowed/denied counts with percentages, throughput (req/s), average latency
+- **Token Context Savings**: Estimated tokens saved by blocking unauthorized actions early
+- **Status Indicators**: LIVE/PAUSED status, scroll position, uptime
+
+### Session Summary
+
+When you quit the dashboard (press `Q`), a session summary is printed to stdout:
+
+```
+────────────────────────────────────────────────────────
+  PREDICATE AUTHORITY SESSION SUMMARY
+────────────────────────────────────────────────────────
+  Duration:         2h 34m 12s
+  Total Requests:   1,870
+  ├─ Allowed:       1,847 (98.8%)
+  └─ Blocked:       23 (1.2%)
+
+  Proofs Generated: 1,870
+  Est. Tokens Saved: ~4,140
+
+  To sync proofs to enterprise vault, run:
+    $ predicate login
+
+────────────────────────────────────────────────────────
+```
+
+### When to Use the Dashboard
+
+- **Local development**: Watch authorization decisions in real-time while testing agents
+- **Debugging**: See exactly what actions are being blocked and why
+- **Demos**: Visual demonstration of the authorization layer intercepting actions
+- **Monitoring**: Over SSH on headless servers (works in any terminal)
+
+---
+
+## Related Documentation
+
+- [sidecar-user-manual.md](../../rust-predicate-authorityd/docs/sidecar-user-manual.md) - Comprehensive user manual
+- [how-it-works.md](../../rust-predicate-authorityd/how-it-works.md) - Architecture of IdP + Sidecar + Mandates
