@@ -19,6 +19,7 @@ dependencies = [
     "predicate-contracts>=0.1.0,<0.5.0",
     "pyyaml>=6.0",
     "cryptography>=42.0.0",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
@@ -32,8 +33,9 @@ predicate-download-sidecar = "predicate_authority.sidecar_binary:_cli_download"
 Documentation = "https://www.PredicateSystems.ai/docs"
 
 [tool.setuptools]
-packages = ["predicate_authority", "predicate_authority.integrations"]
+packages = ["predicate_authority", "predicate_authority.integrations", "predicate_authority.verify"]
 
 [tool.setuptools.package-dir]
 "predicate_authority" = "."
 "predicate_authority.integrations" = "integrations"
+"predicate_authority.verify" = "verify"
