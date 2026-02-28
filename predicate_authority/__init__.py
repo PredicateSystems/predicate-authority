@@ -55,8 +55,36 @@ from predicate_authority.sidecar_binary import (
     run_sidecar,
 )
 from predicate_authority.telemetry import OpenTelemetryTraceEmitter
+from predicate_authority.verify import (
+    ActualOperation,
+    AuthorizedOperation,
+    MandateDetails,
+    RecordVerificationRequest,
+    RecordVerificationResponse,
+    VerificationFailureReason,
+    Verifier,
+    VerifyRequest,
+    VerifyResult,
+    actions_match,
+    normalize_resource,
+    resources_match,
+)
 
 __all__ = [
+    # Verification module
+    "ActualOperation",
+    "AuthorizedOperation",
+    "MandateDetails",
+    "RecordVerificationRequest",
+    "RecordVerificationResponse",
+    "VerificationFailureReason",
+    "Verifier",
+    "VerifyRequest",
+    "VerifyResult",
+    "actions_match",
+    "normalize_resource",
+    "resources_match",
+    # Authorization
     "ActionExecutionResult",
     "ActionGuard",
     "AuthorityClient",
