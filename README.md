@@ -22,6 +22,12 @@
 
 `predicate-authority` is a production-grade pre-execution authority layer that binds AI agent identity to deterministic state. It bridges standard IdPs (Entra ID, Okta, OIDC) with runtime verification so every sensitive action is authorized, bounded, and provable.
 
+## 🛡️ Pre-Execution Authorization — Live in Your Terminal
+
+Watch every ALLOW/DENY decision as it happens. No guesswork. No post-mortems. Real-time control over what your agent can and cannot do.
+
+![TUI Dashboard](docs/assets/tui.gif)
+
 ## Why Predicate Authority?
 
 Most agent security fails because it relies on static API keys or broad permissions. Predicate introduces short-lived mandates that are cryptographically tied to:
