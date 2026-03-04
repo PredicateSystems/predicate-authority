@@ -134,3 +134,168 @@ class ProofEvent:
     allowed: bool
     mandate_id: str | None
     emitted_at_epoch_s: int
+
+
+# =============================================================================
+# Execute types for Phase 5: Execution Proxying (Zero-Trust)
+# =============================================================================
+
+
+class ExecuteErrorCode(str, Enum):
+    """Execution error codes returned by the sidecar."""
+
+    MANDATE_NOT_FOUND = "mandate_not_found"
+    MANDATE_EXPIRED = "mandate_expired"
+    ACTION_MISMATCH = "action_mismatch"
+    RESOURCE_MISMATCH = "resource_mismatch"
+    EXECUTION_FAILED = "execution_failed"
+    UNSUPPORTED_ACTION = "unsupported_action"
+    INVALID_PAYLOAD = "invalid_payload"
+
+
+@dataclass(frozen=True)
+class FileWritePayload:
+    """Payload for fs.write operations."""
+
+    content: str
+    create: bool = False
+    append: bool = False
+
+
+@dataclass(frozen=True)
+class CliExecPayload:
+    """Payload for cli.exec operations."""
+
+    command: str
+    args: tuple[str, ...] = field(default_factory=tuple)
+    cwd: str | None = None
+    timeout_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class HttpFetchPayload:
+    """Payload for http.fetch operations."""
+
+    method: str
+    headers: dict[str, str] | None = None
+    body: str | None = None
+
+
+@dataclass(frozen=True)
+class FileDeletePayload:
+    """Payload for fs.delete operations."""
+
+    recursive: bool = False
+
+
+@dataclass(frozen=True)
+class EnvReadPayload:
+    """Payload for env.read operations."""
+
+    keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExecuteRequest:
+    """POST /v1/execute request body."""
+
+    mandate_id: str
+    action: str
+    resource: str
+    payload: (
+        FileWritePayload
+        | CliExecPayload
+        | HttpFetchPayload
+        | FileDeletePayload
+        | EnvReadPayload
+        | None
+    ) = None
+
+
+@dataclass(frozen=True)
+class FileReadResult:
+    """Result of fs.read operation."""
+
+    content: str
+    size: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class FileWriteResult:
+    """Result of fs.write operation."""
+
+    bytes_written: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class CliExecResult:
+    """Result of cli.exec operation."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+
+
+@dataclass(frozen=True)
+class HttpFetchResult:
+    """Result of http.fetch operation."""
+
+    status_code: int
+    headers: dict[str, str]
+    body: str
+    body_hash: str
+
+
+@dataclass(frozen=True)
+class DirectoryEntry:
+    """Directory entry for fs.list result."""
+
+    name: str
+    entry_type: str  # "file", "dir", "symlink"
+    size: int
+    modified: int | None = None
+
+
+@dataclass(frozen=True)
+class FileListResult:
+    """Result of fs.list operation."""
+
+    entries: tuple[DirectoryEntry, ...]
+    total_entries: int
+
+
+@dataclass(frozen=True)
+class FileDeleteResult:
+    """Result of fs.delete operation."""
+
+    paths_removed: int
+
+
+@dataclass(frozen=True)
+class EnvReadResult:
+    """Result of env.read operation."""
+
+    values: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ExecuteResponse:
+    """POST /v1/execute response body."""
+
+    success: bool
+    audit_id: str
+    result: (
+        FileReadResult
+        | FileWriteResult
+        | CliExecResult
+        | HttpFetchResult
+        | FileListResult
+        | FileDeleteResult
+        | EnvReadResult
+        | None
+    ) = None
+    error: str | None = None
+    evidence_hash: str | None = None

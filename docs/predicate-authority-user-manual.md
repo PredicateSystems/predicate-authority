@@ -470,6 +470,80 @@ Expected delegation path output:
 
 ---
 
+## Execution Proxying (Zero-Trust Mode)
+
+The `/v1/execute` endpoint enables **zero-trust execution** where the sidecar executes operations on behalf of agents. This prevents "confused deputy" attacks where an agent requests authorization for one resource but accesses another.
+
+### Why Zero-Trust?
+
+In cooperative mode, the agent asks for permission and then executes the operation itself. A compromised agent could authorize `fs.read /safe/file` but actually read `/etc/passwd`. In zero-trust mode, the sidecar executes the operation, ensuring the authorized resource is what gets accessed.
+
+### Using Execute Proxy
+
+```python
+from predicate_authority import SidecarClient, AuthorizeAndExecuteOptions
+
+async with SidecarClient() as client:
+    # Combined authorize + execute in one call
+    response = await client.authorize_and_execute(
+        AuthorizeAndExecuteOptions(
+            principal="agent:web",
+            action="fs.read",
+            resource="/src/index.ts"
+        )
+    )
+    print(response.result.content)  # File content from sidecar
+```
+
+Or step-by-step:
+
+```python
+from predicate_authority import SidecarClient
+from predicate_contracts import ExecuteRequest
+
+async with SidecarClient() as client:
+    # Step 1: Authorize
+    auth = await client.authorize(
+        principal="agent:web",
+        action="fs.read",
+        resource="/src/index.ts"
+    )
+
+    if not auth.allowed:
+        raise RuntimeError(f"Denied: {auth.reason}")
+
+    # Step 2: Execute through sidecar
+    result = await client.execute(ExecuteRequest(
+        mandate_id=auth.mandate_id,
+        action="fs.read",
+        resource="/src/index.ts"
+    ))
+
+    print(result.result.content)  # File content
+```
+
+### Supported Actions
+
+| Action | Payload | Result |
+|--------|---------|--------|
+| `fs.read` | None | `FileReadResult { content, size, content_hash }` |
+| `fs.write` | `FileWritePayload { content, create?, append? }` | `FileWriteResult { bytes_written, content_hash }` |
+| `fs.list` | None | `FileListResult { entries, total_entries }` |
+| `fs.delete` | `FileDeletePayload { recursive? }` | `FileDeleteResult { paths_removed }` |
+| `cli.exec` | `CliExecPayload { command, args?, cwd?, timeout_ms? }` | `CliExecResult { exit_code, stdout, stderr, duration_ms }` |
+| `http.fetch` | `HttpFetchPayload { method, headers?, body? }` | `HttpFetchResult { status_code, headers, body, body_hash }` |
+| `env.read` | `EnvReadPayload { keys }` | `EnvReadResult { values }` |
+
+### Security Guarantees
+
+- Mandate must exist and not be expired
+- Requested action/resource must match mandate
+- All executions logged to proof ledger with evidence hashes
+- `fs.delete` with `recursive: true` requires explicit policy allowlist
+- `env.read` only returns values for explicitly authorized keys
+
+---
+
 ## Local identity registry + flush queue
 
 Enable ephemeral task identity registry and local ledger queue:
