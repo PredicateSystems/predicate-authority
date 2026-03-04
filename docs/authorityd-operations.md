@@ -665,7 +665,133 @@ Expected startup output:
 predicate-authorityd listening on http://127.0.0.1:8787 (mode=local_only)
 ```
 
-## 3) Endpoint checks
+## 3) API Endpoints
+
+### Core Authorization
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/authorize` | POST | Core authorization check - returns mandate if allowed |
+| `/v1/delegate` | POST | Delegate mandate to sub-agent |
+| `/v1/execute` | POST | Execute operation via sidecar (zero-trust mode) |
+
+### Operations
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/status` | GET | Stats and status |
+| `/metrics` | GET | Prometheus metrics |
+| `/policy/reload` | POST | Hot-reload policy |
+| `/ledger/flush-now` | POST | Trigger immediate audit flush |
+| `/ledger/dead-letter` | GET | Inspect quarantined events |
+| `/ledger/requeue` | POST | Requeue a dead-letter item |
+
+---
+
+## 3a) Execution Proxying (Zero-Trust Mode)
+
+The `/v1/execute` endpoint enables **zero-trust execution** where the sidecar executes operations on behalf of agents. This prevents "confused deputy" attacks where an agent requests authorization for one resource but accesses another.
+
+### Flow Comparison
+
+```
+Traditional (Cooperative):           Zero-Trust (Execution Proxy):
+┌─────────┐  authorize  ┌─────────┐  ┌─────────┐  execute   ┌─────────┐
+│  Agent  │────────────▶│ Sidecar │  │  Agent  │───────────▶│ Sidecar │
+│         │◀────────────│         │  │         │◀───────────│         │
+│         │   ALLOWED   │         │  │         │  result    │ (reads  │
+│         │             │         │  │         │            │  file)  │
+│  reads  │             │         │  └─────────┘            └─────────┘
+│  file   │             │         │
+│  (could │             │         │  Agent never touches the resource
+│  cheat) │             │         │  directly - sidecar is the executor
+└─────────┘             └─────────┘
+```
+
+### Using Execute Proxy
+
+**Step 1: Authorize and get a mandate**
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/authorize \
+  -H "Content-Type: application/json" \
+  -d '{"principal":"agent:web","action":"fs.read","resource":"/src/index.ts"}'
+# Returns: {"allowed":true,"reason":"allowed","mandate_id":"m_abc123"}
+```
+
+**Step 2: Execute through the sidecar**
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mandate_id": "m_abc123",
+    "action": "fs.read",
+    "resource": "/src/index.ts"
+  }'
+# Returns: {"success":true,"result":{"type":"file_read","content":"...","size":1234,"content_hash":"sha256:..."}}
+```
+
+### Supported Actions
+
+| Action | Payload | Result |
+|--------|---------|--------|
+| `fs.read` | None | `FileRead { content, size, content_hash }` |
+| `fs.write` | `{ type: "file_write", content, create?, append? }` | `FileWrite { bytes_written, content_hash }` |
+| `fs.list` | None | `FileList { entries: [{ name, type, size, modified? }], total_entries }` |
+| `fs.delete` | `{ type: "file_delete", recursive? }` | `FileDelete { paths_removed }` |
+| `cli.exec` | `{ type: "cli_exec", command, args?, cwd?, timeout_ms? }` | `CliExec { exit_code, stdout, stderr, duration_ms }` |
+| `http.fetch` | `{ type: "http_fetch", method, headers?, body? }` | `HttpFetch { status_code, headers, body, body_hash }` |
+| `env.read` | `{ type: "env_read", keys: ["VAR_NAME"] }` | `EnvRead { values: { "VAR_NAME": "..." } }` |
+
+### Security Guarantees
+
+- **Mandate validation**: Mandate must exist and not be expired
+- **Action matching**: Requested action must match mandate's action
+- **Resource scope**: Requested resource must match mandate's resource scope
+- **Audit trail**: All executions logged to proof ledger with evidence hashes
+- **Recursive delete safety**: `fs.delete` with `recursive: true` requires explicit policy allowlist
+- **Env var filtering**: `env.read` only returns values for explicitly authorized keys
+
+### SDK Integration
+
+**Python:**
+
+```python
+from predicate_authority import SidecarClient, AuthorizeAndExecuteOptions
+
+async with SidecarClient() as client:
+    # Combined authorize + execute in one call
+    response = await client.authorize_and_execute(
+        AuthorizeAndExecuteOptions(
+            principal="agent:web",
+            action="fs.read",
+            resource="/src/index.ts"
+        )
+    )
+    print(response.result.content)
+```
+
+**TypeScript:**
+
+```typescript
+import { AuthorityClient } from "@predicatesystems/authority";
+
+const client = new AuthorityClient({ baseUrl: "http://127.0.0.1:8787" });
+
+// Combined authorize + execute
+const response = await client.authorizeAndExecute({
+  principal: "agent:web",
+  action: "fs.read",
+  resource: "/src/index.ts",
+});
+console.log(response.result?.content);
+```
+
+---
+
+## 3b) Endpoint checks
 
 ### Health
 

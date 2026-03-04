@@ -54,6 +54,13 @@ from predicate_authority.sidecar_binary import (
     is_sidecar_available,
     run_sidecar,
 )
+from predicate_authority.sidecar_client import AuthorizationResponse as SidecarAuthorizationResponse
+from predicate_authority.sidecar_client import (
+    AuthorizeAndExecuteOptions,
+    SidecarClient,
+    SidecarClientConfig,
+    SidecarClientError,
+)
 from predicate_authority.telemetry import OpenTelemetryTraceEmitter
 from predicate_authority.verify import (
     ActualOperation,
@@ -135,4 +142,10 @@ __all__ = [
     "get_sidecar_version",
     "is_sidecar_available",
     "run_sidecar",
+    # Sidecar HTTP client (Phase 5: Execution Proxying)
+    "AuthorizeAndExecuteOptions",
+    "SidecarAuthorizationResponse",
+    "SidecarClient",
+    "SidecarClientConfig",
+    "SidecarClientError",
 ]
