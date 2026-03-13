@@ -745,6 +745,42 @@ curl -X POST http://127.0.0.1:8787/v1/execute \
 | `http.fetch` | `{ type: "http_fetch", method, headers?, body? }` | `HttpFetch { status_code, headers, body, body_hash }` |
 | `env.read` | `{ type: "env_read", keys: ["VAR_NAME"] }` | `EnvRead { values: { "VAR_NAME": "..." } }` |
 
+### Secret Injection
+
+Policy rules can specify secrets to inject at execution time. The agent never sees raw credentials - the sidecar substitutes values from its environment:
+
+**Headers for HTTP requests (`inject_headers`):**
+```json
+{
+  "name": "api-with-auth",
+  "effect": "allow",
+  "principals": ["agent:*"],
+  "actions": ["http.fetch"],
+  "resources": ["https://api.github.com/*"],
+  "inject_headers": {
+    "Authorization": "Bearer ${GITHUB_TOKEN}"
+  }
+}
+```
+
+**Environment variables for CLI (`inject_env`):**
+```json
+{
+  "name": "aws-cli",
+  "effect": "allow",
+  "principals": ["agent:ops"],
+  "actions": ["cli.exec"],
+  "resources": ["aws", "aws *"],
+  "inject_env": {
+    "AWS_ACCESS_KEY_ID": "${AWS_ACCESS_KEY_ID}",
+    "AWS_SECRET_ACCESS_KEY": "${AWS_SECRET_ACCESS_KEY}",
+    "AWS_DEFAULT_REGION": "${AWS_REGION:-us-east-1}"
+  }
+}
+```
+
+Syntax: `${VAR_NAME}` for required vars, `${VAR_NAME:-default}` for optional with default.
+
 ### Security Guarantees
 
 - **Mandate validation**: Mandate must exist and not be expired

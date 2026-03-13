@@ -534,6 +534,51 @@ async with SidecarClient() as client:
 | `http.fetch` | `HttpFetchPayload { method, headers?, body? }` | `HttpFetchResult { status_code, headers, body, body_hash }` |
 | `env.read` | `EnvReadPayload { keys }` | `EnvReadResult { values }` |
 
+### Secret Injection (Zero-Knowledge Credentials)
+
+Policy rules can specify secrets to inject at execution time. The agent never sees raw credentials - the sidecar substitutes environment variable values:
+
+**Headers for HTTP requests:**
+```json
+{
+  "name": "github-api",
+  "effect": "allow",
+  "principals": ["agent:*"],
+  "actions": ["http.fetch"],
+  "resources": ["https://api.github.com/*"],
+  "inject_headers": {
+    "Authorization": "Bearer ${GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json"
+  }
+}
+```
+
+**Environment variables for CLI:**
+```json
+{
+  "name": "aws-cli",
+  "effect": "allow",
+  "principals": ["agent:ops"],
+  "actions": ["cli.exec"],
+  "resources": ["aws", "aws *"],
+  "inject_env": {
+    "AWS_ACCESS_KEY_ID": "${AWS_ACCESS_KEY_ID}",
+    "AWS_SECRET_ACCESS_KEY": "${AWS_SECRET_ACCESS_KEY}",
+    "AWS_DEFAULT_REGION": "${AWS_REGION:-us-east-1}"
+  }
+}
+```
+
+**Syntax:**
+- `${VAR_NAME}` - Substitute with environment variable (error if not set)
+- `${VAR_NAME:-default}` - Use default value if variable not set
+
+**Security benefits:**
+- Agents never see or handle raw secrets
+- Policy controls which secrets are injected where
+- Even compromised agents cannot exfiltrate credentials
+- Works with existing agents without code changes
+
 ### Security Guarantees
 
 - Mandate must exist and not be expired
@@ -541,6 +586,7 @@ async with SidecarClient() as client:
 - All executions logged to proof ledger with evidence hashes
 - `fs.delete` with `recursive: true` requires explicit policy allowlist
 - `env.read` only returns values for explicitly authorized keys
+- Secret injection values are redacted from audit logs
 
 ---
 
